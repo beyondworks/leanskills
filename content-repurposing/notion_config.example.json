@@ -1,0 +1,16 @@
+{
+    "notion_api_key": "YOUR_NOTION_API_KEY",
+    "openai_api_key": "YOUR_OPENAI_API_KEY",
+    "apify_api_key": "YOUR_APIFY_API_KEY",
+    "email_recipient": "your@email.com",
+    "gmail_credentials_file": "gmail_credentials.json",
+    "gmail_client_id": "YOUR_CLIENT_ID",
+    "gmail_client_secret": "YOUR_CLIENT_SECRET",
+    "categories": {
+        "AI": "YOUR_NOTION_DB_ID",
+        "Automation": "YOUR_NOTION_DB_ID",
+        "SEO": "YOUR_NOTION_DB_ID",
+        "Marketing": "YOUR_NOTION_DB_ID",
+        "Dev": "YOUR_NOTION_DB_ID"
+    }
+}

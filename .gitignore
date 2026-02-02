@@ -1,0 +1,13 @@
+# Secrets and config
+notion_config.json
+gmail_credentials.json
+gmail_token.json
+*.pyc
+__pycache__/
+
+# Generated files
+transcript.txt
+blog_post.md
+content.json
+metadata.json
+*.png
