@@ -1,0 +1,9 @@
+# Secret config (use notion_config.example.json as template)
+notion_config.json
+
+# Generated files
+content.json
+metadata.json
+transcript.txt
+*.pyc
+__pycache__/
