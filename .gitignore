@@ -2,6 +2,8 @@
 notion_config.json
 gmail_credentials.json
 gmail_token.json
+.env
+conversation_history.json
 *.pyc
 __pycache__/
 
