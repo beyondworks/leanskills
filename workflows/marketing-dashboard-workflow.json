@@ -1,0 +1,226 @@
+{
+  "name": "광고 성과 통합 마케팅 대시보드 + Slack",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger-001",
+      "name": "6시간마다 실행",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [200, 400]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://graph.facebook.com/v18.0/act_{{$json.fb_ad_account_id}}/insights",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "fields", "value": "campaign_name,impressions,clicks,spend,cpc,ctr,reach,actions" },
+            { "name": "date_preset", "value": "last_7d" },
+            { "name": "level", "value": "campaign" }
+          ]
+        },
+        "options": { "response": { "response": { "fullResponse": false } } }
+      },
+      "id": "fb-ads-api-001",
+      "name": "Facebook Ads API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://googleads.googleapis.com/v14/customers/{{$json.google_customer_id}}/googleAds:searchStream",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "developer-token", "value": "={{$json.google_developer_token}}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"query\": \"SELECT campaign.name, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions FROM campaign WHERE segments.date DURING LAST_7_DAYS\"\n}",
+        "options": {}
+      },
+      "id": "google-ads-api-001",
+      "name": "Google Ads API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://analyticsdata.googleapis.com/v1beta/properties/{{$json.ga4_property_id}}:runReport",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"dateRanges\": [{\"startDate\": \"7daysAgo\", \"endDate\": \"today\"}],\n  \"dimensions\": [\n    {\"name\": \"sessionSource\"},\n    {\"name\": \"sessionMedium\"}\n  ],\n  \"metrics\": [\n    {\"name\": \"sessions\"},\n    {\"name\": \"conversions\"},\n    {\"name\": \"totalRevenue\"},\n    {\"name\": \"bounceRate\"}\n  ]\n}",
+        "options": {}
+      },
+      "id": "ga4-api-001",
+      "name": "Google Analytics 4",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 600]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "id": "merge-data-001",
+      "name": "데이터 병합",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [800, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 수집된 광고 데이터를 Notion DB 형식으로 정규화\nconst today = new Date().toISOString().split('T')[0];\nconst items = $input.all();\n\nconst results = [];\n\n// Facebook Ads 데이터 처리\nif (items[0]?.json?.data) {\n  const fbData = items[0].json.data;\n  for (const campaign of fbData) {\n    results.push({\n      date: today,\n      channel: 'Facebook Ads',\n      campaign_name: campaign.campaign_name || 'Unknown',\n      impressions: parseInt(campaign.impressions) || 0,\n      clicks: parseInt(campaign.clicks) || 0,\n      spend: parseFloat(campaign.spend) || 0,\n      cpc: parseFloat(campaign.cpc) || 0,\n      ctr: parseFloat(campaign.ctr) || 0,\n      conversions: campaign.actions?.find(a => a.action_type === 'purchase')?.value || 0,\n      source: 'facebook'\n    });\n  }\n}\n\n// Google Ads 데이터 처리\nif (items[1]?.json?.results) {\n  const gaData = items[1].json.results;\n  for (const row of gaData) {\n    const campaign = row.campaign || {};\n    const metrics = row.metrics || {};\n    results.push({\n      date: today,\n      channel: 'Google Ads',\n      campaign_name: campaign.name || 'Unknown',\n      impressions: parseInt(metrics.impressions) || 0,\n      clicks: parseInt(metrics.clicks) || 0,\n      spend: (parseInt(metrics.costMicros) || 0) / 1000000,\n      cpc: metrics.clicks > 0 ? (metrics.costMicros / 1000000) / metrics.clicks : 0,\n      ctr: metrics.impressions > 0 ? (metrics.clicks / metrics.impressions) * 100 : 0,\n      conversions: parseFloat(metrics.conversions) || 0,\n      source: 'google_ads'\n    });\n  }\n}\n\n// GA4 데이터 처리\nif (items[2]?.json?.rows) {\n  const ga4Data = items[2].json.rows;\n  for (const row of ga4Data) {\n    const dims = row.dimensionValues || [];\n    const mets = row.metricValues || [];\n    results.push({\n      date: today,\n      channel: 'Google Analytics 4',\n      campaign_name: `${dims[0]?.value || 'Unknown'} / ${dims[1]?.value || 'Unknown'}`,\n      impressions: 0,\n      clicks: parseInt(mets[0]?.value) || 0,\n      spend: 0,\n      cpc: 0,\n      ctr: 0,\n      conversions: parseFloat(mets[1]?.value) || 0,\n      revenue: parseFloat(mets[2]?.value) || 0,\n      bounce_rate: parseFloat(mets[3]?.value) || 0,\n      source: 'ga4'\n    });\n  }\n}\n\n// 채널별 요약 통계 추가\nconst summary = {\n  date: today,\n  channel: 'SUMMARY',\n  campaign_name: '전체 요약',\n  impressions: results.reduce((sum, r) => sum + r.impressions, 0),\n  clicks: results.reduce((sum, r) => sum + r.clicks, 0),\n  spend: results.reduce((sum, r) => sum + r.spend, 0),\n  conversions: results.reduce((sum, r) => sum + r.conversions, 0),\n  source: 'summary'\n};\nsummary.cpc = summary.clicks > 0 ? summary.spend / summary.clicks : 0;\nsummary.ctr = summary.impressions > 0 ? (summary.clicks / summary.impressions) * 100 : 0;\n\nresults.unshift(summary);\n\nreturn results.map(item => ({ json: item }));"
+      },
+      "id": "normalize-data-001",
+      "name": "데이터 정규화",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 400]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "Marketing_Dashboard"
+        },
+        "propertiesUi": {
+          "propertyValues": [
+            { "key": "Date|date", "dateValue": "={{ $json.date }}" },
+            { "key": "Channel|select", "selectValue": "={{ $json.channel }}" },
+            { "key": "Campaign|title", "textValue": "={{ $json.campaign_name }}" },
+            { "key": "Impressions|number", "numberValue": "={{ $json.impressions }}" },
+            { "key": "Clicks|number", "numberValue": "={{ $json.clicks }}" },
+            { "key": "Spend|number", "numberValue": "={{ $json.spend }}" },
+            { "key": "CPC|number", "numberValue": "={{ $json.cpc }}" },
+            { "key": "CTR|number", "numberValue": "={{ $json.ctr }}" },
+            { "key": "Conversions|number", "numberValue": "={{ $json.conversions }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "notion-save-001",
+      "name": "Notion DB 저장",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [1300, 400],
+      "credentials": {
+        "notionApi": {
+          "id": "xw5kbbLStDNvEvBq",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "config-fb-account", "name": "fb_ad_account_id", "value": "YOUR_FB_AD_ACCOUNT_ID", "type": "string" },
+            { "id": "config-google-customer", "name": "google_customer_id", "value": "YOUR_GOOGLE_CUSTOMER_ID", "type": "string" },
+            { "id": "config-google-token", "name": "google_developer_token", "value": "YOUR_GOOGLE_DEVELOPER_TOKEN", "type": "string" },
+            { "id": "config-ga4-property", "name": "ga4_property_id", "value": "YOUR_GA4_PROPERTY_ID", "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "config-node-001",
+      "name": "설정값 (수정 필요)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [350, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 마케팅 성과 데이터를 Slack Block Kit 리포트로 변환\nconst items = $input.all();\nconst today = new Date().toISOString().split('T')[0];\n\n// 채널별 집계\nconst channelData = {};\nlet totalImpressions = 0, totalClicks = 0, totalSpend = 0, totalConversions = 0;\n\nfor (const item of items) {\n  const d = item.json;\n  if (d.channel === 'SUMMARY') continue;\n\n  if (!channelData[d.channel]) {\n    channelData[d.channel] = { impressions: 0, clicks: 0, spend: 0, conversions: 0 };\n  }\n  channelData[d.channel].impressions += d.impressions || 0;\n  channelData[d.channel].clicks += d.clicks || 0;\n  channelData[d.channel].spend += d.spend || 0;\n  channelData[d.channel].conversions += d.conversions || 0;\n\n  totalImpressions += d.impressions || 0;\n  totalClicks += d.clicks || 0;\n  totalSpend += d.spend || 0;\n  totalConversions += d.conversions || 0;\n}\n\nconst cpa = totalConversions > 0 ? Math.round(totalSpend / totalConversions) : 0;\nconst roas = totalSpend > 0 ? ((totalConversions * 50000) / totalSpend).toFixed(1) : '0';\n\n// 채널별 리포트 텍스트 생성\nlet channelReport = '';\nfor (const [channel, data] of Object.entries(channelData)) {\n  const icon = channel.includes('Facebook') ? '🔵' : channel.includes('Google Ads') ? '🟢' : '🟠';\n  channelReport += `${icon} *${channel}*\\n`;\n  channelReport += `    노출: ${data.impressions.toLocaleString()} | 클릭: ${data.clicks.toLocaleString()} | 전환: ${data.conversions}건 | 비용: ₩${Math.round(data.spend).toLocaleString()}\\n`;\n}\n\nconst blocks = [\n  {\n    type: 'header',\n    text: { type: 'plain_text', text: `📊 마케팅 성과 리포트 - ${today}` }\n  },\n  { type: 'divider' },\n  {\n    type: 'section',\n    text: {\n      type: 'mrkdwn',\n      text: channelReport || '데이터가 없습니다.'\n    }\n  },\n  { type: 'divider' },\n  {\n    type: 'section',\n    fields: [\n      { type: 'mrkdwn', text: `*📈 총 노출:*\\n${totalImpressions.toLocaleString()}` },\n      { type: 'mrkdwn', text: `*👆 총 클릭:*\\n${totalClicks.toLocaleString()}` },\n      { type: 'mrkdwn', text: `*🎯 총 전환:*\\n${totalConversions}건` },\n      { type: 'mrkdwn', text: `*💰 총 비용:*\\n₩${Math.round(totalSpend).toLocaleString()}` }\n    ]\n  },\n  {\n    type: 'section',\n    fields: [\n      { type: 'mrkdwn', text: `*CPA:*\\n₩${cpa.toLocaleString()}` },\n      { type: 'mrkdwn', text: `*ROAS:*\\n${roas}x` }\n    ]\n  },\n  { type: 'divider' },\n  {\n    type: 'context',\n    elements: [{\n      type: 'mrkdwn',\n      text: `🔗 <https://notion.so|Notion 대시보드> | 최근 7일 기준 | n8n 자동화`\n    }]\n  }\n];\n\nreturn [{\n  json: {\n    blocks: JSON.stringify(blocks),\n    text: `📊 마케팅 성과 리포트 (${today}) - 전환 ${totalConversions}건, 비용 ₩${Math.round(totalSpend).toLocaleString()}`\n  }\n}];"
+      },
+      "id": "slack-format-001",
+      "name": "Slack 리포트 생성",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1550, 400]
+    },
+    {
+      "parameters": {
+        "operation": "post",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "auto-marketing",
+          "mode": "name"
+        },
+        "text": "={{ $json.text }}",
+        "otherOptions": {
+          "includeLinkToWorkflow": false,
+          "blocksUi": "={{ $json.blocks }}"
+        }
+      },
+      "id": "slack-send-001",
+      "name": "Slack 마케팅 알림",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [1800, 400]
+    }
+  ],
+  "connections": {
+    "6시간마다 실행": {
+      "main": [[{ "node": "설정값 (수정 필요)", "type": "main", "index": 0 }]]
+    },
+    "설정값 (수정 필요)": {
+      "main": [[
+        { "node": "Facebook Ads API", "type": "main", "index": 0 },
+        { "node": "Google Ads API", "type": "main", "index": 0 },
+        { "node": "Google Analytics 4", "type": "main", "index": 0 }
+      ]]
+    },
+    "Facebook Ads API": {
+      "main": [[{ "node": "데이터 병합", "type": "main", "index": 0 }]]
+    },
+    "Google Ads API": {
+      "main": [[{ "node": "데이터 병합", "type": "main", "index": 1 }]]
+    },
+    "Google Analytics 4": {
+      "main": [[{ "node": "데이터 병합", "type": "main", "index": 2 }]]
+    },
+    "데이터 병합": {
+      "main": [[{ "node": "데이터 정규화", "type": "main", "index": 0 }]]
+    },
+    "데이터 정규화": {
+      "main": [[{ "node": "Notion DB 저장", "type": "main", "index": 0 }]]
+    },
+    "Notion DB 저장": {
+      "main": [[{ "node": "Slack 리포트 생성", "type": "main", "index": 0 }]]
+    },
+    "Slack 리포트 생성": {
+      "main": [[{ "node": "Slack 마케팅 알림", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

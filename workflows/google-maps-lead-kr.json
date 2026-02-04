@@ -1,0 +1,103 @@
+{
+  "name": "[리드발굴] Google Maps 비즈니스 리드 수집",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "수동 실행",
+      "type": "n8n-nodes-base.manualTrigger",
+      "position": [0, 0],
+      "parameters": {},
+      "typeVersion": 1,
+      "notesInFlow": true,
+      "notes": "🚀 워크플로우 시작점\n\n테스트 실행 버튼을 클릭하면 워크플로우가 시작됩니다."
+    },
+    {
+      "id": "apify",
+      "name": "Google Maps 데이터 수집",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [240, 0],
+      "parameters": {
+        "url": "https://api.apify.com/v2/acts/compass~crawler-google-places/run-sync-get-dataset-items?token=YOUR_APIFY_TOKEN",
+        "method": "POST",
+        "options": {"timeout": 120000},
+        "jsonBody": "{\n  \"language\": \"ko\",\n  \"locationQuery\": \"서울, 대한민국\",\n  \"maxCrawledPlacesPerSearch\": 50,\n  \"searchStringsArray\": [\"마케팅 대행사\"],\n  \"skipClosedPlaces\": true\n}",
+        "sendBody": true,
+        "specifyBody": "json"
+      },
+      "typeVersion": 4.2,
+      "notesInFlow": true,
+      "notes": "📍 Apify Google Maps Scraper\n\n⚙️ 설정 필요:\n- token: YOUR_APIFY_TOKEN을 실제 토큰으로 교체\n- locationQuery: 검색 지역\n- searchStringsArray: 검색 키워드\n- maxCrawledPlacesPerSearch: 최대 결과 수\n\n⚠️ Apify 계정 필요: https://apify.com"
+    },
+    {
+      "id": "clean",
+      "name": "데이터 정리",
+      "type": "n8n-nodes-base.set",
+      "position": [480, 0],
+      "parameters": {
+        "options": {},
+        "assignments": {
+          "assignments": [
+            {"id": "1", "name": "업체명", "type": "string", "value": "={{ $json.title }}"},
+            {"id": "2", "name": "카테고리", "type": "string", "value": "={{ $json.categoryName }}"},
+            {"id": "3", "name": "주소", "type": "string", "value": "={{ $json.address }}"},
+            {"id": "4", "name": "웹사이트", "type": "string", "value": "={{ $json.website }}"},
+            {"id": "5", "name": "전화번호", "type": "string", "value": "={{ $json.phone }}"},
+            {"id": "6", "name": "평점", "type": "number", "value": "={{ $json.totalScore }}"},
+            {"id": "7", "name": "리뷰수", "type": "number", "value": "={{ $json.reviewsCount }}"},
+            {"id": "8", "name": "구글맵URL", "type": "string", "value": "={{ $json.url }}"}
+          ]
+        }
+      },
+      "typeVersion": 3.4,
+      "notesInFlow": true,
+      "notes": "📝 데이터 정리\n\n수집된 원시 데이터에서 필요한 필드만 추출합니다:\n- 업체명, 카테고리, 주소\n- 웹사이트, 전화번호\n- 평점, 리뷰수, 구글맵 링크"
+    },
+    {
+      "id": "aggregate",
+      "name": "결과 집계",
+      "type": "n8n-nodes-base.aggregate",
+      "position": [720, 0],
+      "parameters": {
+        "options": {},
+        "aggregate": "aggregateAllItemData"
+      },
+      "typeVersion": 1,
+      "notesInFlow": true,
+      "notes": "📊 결과 집계\n\n모든 리드 데이터를 하나의 배열로 집계합니다."
+    },
+    {
+      "id": "slack",
+      "name": "Slack 결과 알림",
+      "type": "n8n-nodes-base.slack",
+      "position": [960, 0],
+      "parameters": {
+        "select": "channel",
+        "channelId": {"__rl": true, "mode": "name", "value": "#general"},
+        "text": "=:mag: *Google Maps 리드 수집 완료*\n\n:bar_chart: 총 {{ $json.data.length }}개 리드 수집\n\n:office: *상위 5개 업체*\n{{ $json.data.slice(0, 5).map((item, i) => `${i+1}. ${item['업체명']} (${item['카테고리']}) - ${item['전화번호'] || '전화없음'}`).join('\\n') }}\n\n:link: 전체 데이터는 n8n 실행 결과에서 확인하세요.",
+        "otherOptions": {}
+      },
+      "typeVersion": 2.3,
+      "notesInFlow": true,
+      "notes": "📢 Slack 알림\n\n리드 수집 결과를 Slack으로 전송합니다.\n\n⚠️ 설정 필요:\n- Slack 자격증명 연결\n- 채널명 확인 (#general)"
+    },
+    {
+      "id": "note1",
+      "name": "워크플로우 안내",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [-200, -250],
+      "parameters": {
+        "width": 450,
+        "height": 280,
+        "content": "## 🗺️ Google Maps 리드 발굴 자동화\n\n### 기능\nGoogle Maps에서 비즈니스 정보를 수집하고 Slack으로 결과 알림\n\n### 필수 설정\n1. **Apify API 토큰** - Google Maps 데이터 수집 노드의 URL에서 YOUR_APIFY_TOKEN 교체\n2. **Slack 자격증명** - Slack 결과 알림 노드에 연결\n\n### 사용 방법\n1. 검색 키워드와 지역 수정 (Google Maps 데이터 수집 노드)\n2. 테스트 실행 버튼 클릭\n3. Slack에서 결과 확인"
+      },
+      "typeVersion": 1
+    }
+  ],
+  "connections": {
+    "수동 실행": {"main": [[{"node": "Google Maps 데이터 수집", "type": "main", "index": 0}]]},
+    "Google Maps 데이터 수집": {"main": [[{"node": "데이터 정리", "type": "main", "index": 0}]]},
+    "데이터 정리": {"main": [[{"node": "결과 집계", "type": "main", "index": 0}]]},
+    "결과 집계": {"main": [[{"node": "Slack 결과 알림", "type": "main", "index": 0}]]}
+  },
+  "settings": {"executionOrder": "v1"}
+}

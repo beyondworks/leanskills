@@ -1,0 +1,237 @@
+{
+  "name": "[스케줄비서] SSH + Slack (v2)",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Slack 메시지 수신",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "webhookId": "schedule-ssh-assistant",
+      "parameters": {
+        "path": "schedule-ssh-assistant",
+        "httpMethod": "POST",
+        "responseMode": "onReceived",
+        "responseCode": 200,
+        "options": {}
+      }
+    },
+    {
+      "id": "filter",
+      "name": "메시지 필터",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        400,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "1",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.body?.event?.bot_id ? true : false }}",
+              "rightValue": ""
+            },
+            {
+              "id": "2",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.body?.event?.text }}",
+              "rightValue": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "extract",
+      "name": "메시지 추출",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        600,
+        200
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "user_message",
+              "value": "={{ $json.body.event.text }}",
+              "type": "string"
+            },
+            {
+              "id": "2",
+              "name": "channel",
+              "value": "={{ $json.body.event.channel }}",
+              "type": "string"
+            },
+            {
+              "id": "3",
+              "name": "user",
+              "value": "={{ $json.body.event.user }}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ssh",
+      "name": "스킬 실행 (SSH)",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        800,
+        200
+      ],
+      "parameters": {
+        "operation": "executeCommand",
+        "command": "=python3 /Users/yoogeon/.claude/skills/schedule-assistant/run.py \"{{ $json.user_message.replace('\"', '\\\"') }}\""
+      },
+      "credentials": {
+        "sshPassword": {
+          "id": "cred_ssh_localhost",
+          "name": "SSH localhost (Mac)"
+        }
+      }
+    },
+    {
+      "id": "parse",
+      "name": "응답 파싱",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1000,
+        200
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "ai_response",
+              "value": "={{ JSON.parse($json.stdout).response }}",
+              "type": "string"
+            },
+            {
+              "id": "2",
+              "name": "channel",
+              "value": "={{ $('메시지 추출').item.json.channel }}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "slack",
+      "name": "Slack 응답",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        1200,
+        200
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.channel }}"
+        },
+        "text": "={{ $json.ai_response }}",
+        "otherOptions": {}
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "67xs3j3Zo3E8M20w",
+          "name": "Slack account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Slack 메시지 수신": {
+      "main": [
+        [
+          {
+            "node": "메시지 필터",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "메시지 필터": {
+      "main": [
+        [
+          {
+            "node": "메시지 추출",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "메시지 추출": {
+      "main": [
+        [
+          {
+            "node": "스킬 실행 (SSH)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "스킬 실행 (SSH)": {
+      "main": [
+        [
+          {
+            "node": "응답 파싱",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "응답 파싱": {
+      "main": [
+        [
+          {
+            "node": "Slack 응답",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

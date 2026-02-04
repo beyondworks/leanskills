@@ -1,0 +1,230 @@
+{
+  "name": "Daily News Clipping (Perplexity + OpenAI)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "0 9 * * *" }]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "매일 아침 9시",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 5개 카테고리 정의 - 5개 아이템을 배열로 반환\nconst today = new Date().toISOString().split('T')[0];\nreturn [\n  {\n    json: {\n      category: 'AI',\n      query: 'AI tools practical tips news 2026',\n      dbId: '241003c7-f7be-806c-8a6e-c0e95ed37fe3',\n      titleField: 'Entry name',\n      date: today\n    }\n  },\n  {\n    json: {\n      category: 'Design',\n      query: 'UI UX design trends tips 2026',\n      dbId: '241003c7-f7be-804f-a021-fc24777ca9ad',\n      titleField: 'Entry name',\n      date: today\n    }\n  },\n  {\n    json: {\n      category: 'Branding',\n      query: 'branding strategy tips 2026',\n      dbId: '247003c7-f7be-803a-83f5-fd9494d24d62',\n      titleField: 'Entry name',\n      date: today\n    }\n  },\n  {\n    json: {\n      category: 'Build',\n      query: 'web development coding tips 2026',\n      dbId: '247003c7-f7be-8074-a583-e1638fd3cfed',\n      titleField: 'Entry name',\n      date: today\n    }\n  },\n  {\n    json: {\n      category: 'Marketing',\n      query: 'marketing growth strategy 2026',\n      dbId: '247003c7-f7be-8035-83f4-d39480d66503',\n      titleField: 'Entry name',\n      date: today\n    }\n  }\n];"
+      },
+      "id": "set-categories",
+      "name": "카테고리 정의",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.perplexity.ai/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"sonar\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a professional news researcher. Search for the latest news, articles, tips, and practical information about the given topic. Find content from various sources including news sites, X (Twitter), Threads, Reddit, YouTube, and blogs. Return exactly 5 items as a valid JSON array with fields: title (string), url (string), source (string), summary (string - 1-2 sentences in Korean). Focus on actionable, practical content that professionals can use immediately. Return ONLY the JSON array, no other text.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Find the latest 5 news and articles about: {{ $json.query }}\"\n    }\n  ],\n  \"max_tokens\": 2000,\n  \"temperature\": 0.2,\n  \"return_citations\": true\n}",
+        "options": {}
+      },
+      "id": "perplexity-search",
+      "name": "Perplexity 검색",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "NcEOsIRwIqlaElTb",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst category = $('카테고리 정의').item.json;\n\nlet content = '';\ntry {\n  content = input.choices?.[0]?.message?.content || '';\n} catch (e) {\n  content = '';\n}\n\n// Parse JSON from response\nlet results = [];\ntry {\n  // Try to extract JSON array from the response\n  const jsonMatch = content.match(/\\[\\s*\\{[\\s\\S]*\\}\\s*\\]/g);\n  if (jsonMatch) {\n    results = JSON.parse(jsonMatch[0]);\n  } else {\n    // Fallback: use citations if available\n    const citations = input.citations || [];\n    results = citations.slice(0, 5).map((url, i) => ({\n      title: `${category.category} News ${i + 1}`,\n      url: url,\n      source: new URL(url).hostname,\n      summary: '뉴스 내용을 확인해주세요.'\n    }));\n  }\n} catch (e) {\n  // Fallback with citations\n  const citations = input.citations || [];\n  results = citations.slice(0, 5).map((url, i) => ({\n    title: `${category.category} News ${i + 1}`,\n    url: url,\n    source: new URL(url).hostname,\n    summary: '뉴스 내용을 확인해주세요.'\n  }));\n}\n\nreturn results.slice(0, 5).map(item => ({\n  json: {\n    title: item.title || 'No Title',\n    url: item.url || '',\n    source: item.source || '',\n    summary: item.summary || '',\n    date: category.date,\n    category: category.category,\n    dbId: category.dbId,\n    titleField: category.titleField\n  }\n}));"
+      },
+      "id": "parse-perplexity",
+      "name": "결과 파싱",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            { "outputKey": "AI", "conditions": { "options": { "caseSensitive": true }, "combinator": "and", "conditions": [{ "leftValue": "={{ $json.category }}", "rightValue": "AI", "operator": { "type": "string", "operation": "equals" } }] } },
+            { "outputKey": "Design", "conditions": { "options": { "caseSensitive": true }, "combinator": "and", "conditions": [{ "leftValue": "={{ $json.category }}", "rightValue": "Design", "operator": { "type": "string", "operation": "equals" } }] } },
+            { "outputKey": "Branding", "conditions": { "options": { "caseSensitive": true }, "combinator": "and", "conditions": [{ "leftValue": "={{ $json.category }}", "rightValue": "Branding", "operator": { "type": "string", "operation": "equals" } }] } },
+            { "outputKey": "Build", "conditions": { "options": { "caseSensitive": true }, "combinator": "and", "conditions": [{ "leftValue": "={{ $json.category }}", "rightValue": "Build", "operator": { "type": "string", "operation": "equals" } }] } },
+            { "outputKey": "Marketing", "conditions": { "options": { "caseSensitive": true }, "combinator": "and", "conditions": [{ "leftValue": "={{ $json.category }}", "rightValue": "Marketing", "operator": { "type": "string", "operation": "equals" } }] } }
+          ]
+        },
+        "options": {}
+      },
+      "id": "switch-category",
+      "name": "카테고리 분기",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": { "__rl": true, "mode": "id", "value": "241003c7-f7be-806c-8a6e-c0e95ed37fe3" },
+        "title": "={{ $json.title }}",
+        "options": {}
+      },
+      "id": "notion-ai",
+      "name": "Notion AI",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [1100, 0],
+      "credentials": {
+        "notionApi": {
+          "id": "xw5kbbLStDNvEvBq",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": { "__rl": true, "mode": "id", "value": "241003c7-f7be-804f-a021-fc24777ca9ad" },
+        "title": "={{ $json.title }}",
+        "propertiesUi": {
+          "propertyValues": [
+            { "key": "URL", "urlValue": "={{ $json.url }}" },
+            { "key": "Date", "date": "={{ $json.date }}", "includeTime": false },
+            { "key": "Source", "richTextValue": "={{ $json.source }}" },
+            { "key": "Summary", "richTextValue": "={{ $json.summary }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "notion-design",
+      "name": "Notion Design",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [1100, 150],
+      "credentials": {
+        "notionApi": {
+          "id": "xw5kbbLStDNvEvBq",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": { "__rl": true, "mode": "id", "value": "247003c7-f7be-803a-83f5-fd9494d24d62" },
+        "title": "={{ $json.title }}",
+        "propertiesUi": {
+          "propertyValues": [
+            { "key": "URL", "urlValue": "={{ $json.url }}" },
+            { "key": "Date", "date": "={{ $json.date }}", "includeTime": false },
+            { "key": "Source", "richTextValue": "={{ $json.source }}" },
+            { "key": "Summary", "richTextValue": "={{ $json.summary }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "notion-branding",
+      "name": "Notion Branding",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [1100, 300],
+      "credentials": {
+        "notionApi": {
+          "id": "xw5kbbLStDNvEvBq",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": { "__rl": true, "mode": "id", "value": "247003c7-f7be-8074-a583-e1638fd3cfed" },
+        "title": "={{ $json.title }}",
+        "propertiesUi": {
+          "propertyValues": [
+            { "key": "URL", "urlValue": "={{ $json.url }}" },
+            { "key": "Date", "date": "={{ $json.date }}", "includeTime": false },
+            { "key": "Source", "selectValue": "Web" },
+            { "key": "Summary", "richTextValue": "={{ $json.summary }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "notion-build",
+      "name": "Notion Build",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [1100, 450],
+      "credentials": {
+        "notionApi": {
+          "id": "xw5kbbLStDNvEvBq",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": { "__rl": true, "mode": "id", "value": "247003c7-f7be-8035-83f4-d39480d66503" },
+        "title": "={{ $json.title }}",
+        "propertiesUi": {
+          "propertyValues": [
+            { "key": "URL", "urlValue": "={{ $json.url }}" },
+            { "key": "Date", "date": "={{ $json.date }}", "includeTime": false },
+            { "key": "Source", "richTextValue": "={{ $json.source }}" },
+            { "key": "Summary", "richTextValue": "={{ $json.summary }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "notion-marketing",
+      "name": "Notion Marketing",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [1100, 600],
+      "credentials": {
+        "notionApi": {
+          "id": "xw5kbbLStDNvEvBq",
+          "name": "Notion account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "매일 아침 9시": { "main": [[{ "node": "카테고리 정의", "type": "main", "index": 0 }]] },
+    "카테고리 정의": { "main": [[{ "node": "Perplexity 검색", "type": "main", "index": 0 }]] },
+    "Perplexity 검색": { "main": [[{ "node": "결과 파싱", "type": "main", "index": 0 }]] },
+    "결과 파싱": { "main": [[{ "node": "카테고리 분기", "type": "main", "index": 0 }]] },
+    "카테고리 분기": { "main": [
+      [{ "node": "Notion AI", "type": "main", "index": 0 }],
+      [{ "node": "Notion Design", "type": "main", "index": 0 }],
+      [{ "node": "Notion Branding", "type": "main", "index": 0 }],
+      [{ "node": "Notion Build", "type": "main", "index": 0 }],
+      [{ "node": "Notion Marketing", "type": "main", "index": 0 }]
+    ] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Seoul",
+    "saveExecutionProgress": true,
+    "saveDataSuccessExecution": "all"
+  }
+}

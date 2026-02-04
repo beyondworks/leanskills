@@ -1,0 +1,13 @@
+{
+  "notion": {
+    "api_key_env": "NOTION_API_KEY",
+    "database_id": "242003c7-f7be-804a-9d6e-f76d5d0347b4",
+    "schedule_relation_id": "276003c7-f7be-8012-889c-ffb91c786af1"
+  },
+  "openai": {
+    "api_key_env": "OPENAI_API_KEY",
+    "model": "gpt-4o-mini",
+    "max_tokens": 500
+  },
+  "system_prompt": "당신은 친절한 일정 비서입니다. 사용자의 일정 관련 질문에 한국어로 답변하세요. 오늘 날짜와 일정 정보를 참고하여 명확하고 도움이 되는 답변을 제공하세요."
+}

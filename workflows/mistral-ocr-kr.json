@@ -1,0 +1,161 @@
+{
+  "name": "[문서처리] Mistral OCR 문서/이미지 텍스트 추출",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "수동 실행",
+      "type": "n8n-nodes-base.manualTrigger",
+      "position": [0, 100],
+      "parameters": {},
+      "typeVersion": 1,
+      "notesInFlow": true,
+      "notes": "🚀 워크플로우 시작점\n\n테스트 실행 버튼을 클릭하면 워크플로우가 시작됩니다."
+    },
+    {
+      "id": "doc-url",
+      "name": "문서 URL 설정",
+      "type": "n8n-nodes-base.set",
+      "position": [240, 0],
+      "parameters": {
+        "options": {},
+        "assignments": {
+          "assignments": [
+            {"id": "1", "name": "url", "type": "string", "value": "https://example.com/document.pdf"},
+            {"id": "2", "name": "type", "type": "string", "value": "document"}
+          ]
+        }
+      },
+      "typeVersion": 3.4,
+      "notesInFlow": true,
+      "notes": "📄 PDF 문서 URL 설정\n\n처리할 PDF 문서의 공개 URL을 입력하세요.\n\n⚠️ URL은 공개적으로 접근 가능해야 합니다."
+    },
+    {
+      "id": "img-url",
+      "name": "이미지 URL 설정",
+      "type": "n8n-nodes-base.set",
+      "position": [240, 200],
+      "parameters": {
+        "options": {},
+        "assignments": {
+          "assignments": [
+            {"id": "1", "name": "url", "type": "string", "value": "https://example.com/image.png"},
+            {"id": "2", "name": "type", "type": "string", "value": "image"}
+          ]
+        }
+      },
+      "typeVersion": 3.4,
+      "notesInFlow": true,
+      "notes": "🖼️ 이미지 URL 설정\n\n처리할 이미지의 공개 URL을 입력하세요.\n\n지원 형식: PNG, JPG, JPEG, GIF, WEBP"
+    },
+    {
+      "id": "doc-ocr",
+      "name": "문서 OCR 처리",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [480, 0],
+      "parameters": {
+        "url": "https://api.mistral.ai/v1/ocr",
+        "method": "POST",
+        "options": {},
+        "jsonBody": "={\n  \"model\": \"mistral-ocr-latest\",\n  \"document\": {\n    \"type\": \"document_url\",\n    \"document_url\": \"{{ $json.url }}\"\n  }\n}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "mistralCloudApi"
+      },
+      "typeVersion": 4.2,
+      "notesInFlow": true,
+      "notes": "📑 Mistral OCR - 문서 처리\n\nPDF 문서를 분석하여 텍스트를 추출합니다.\n\n⚠️ 설정 필요:\n- Mistral Cloud API 자격증명"
+    },
+    {
+      "id": "img-ocr",
+      "name": "이미지 OCR 처리",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [480, 200],
+      "parameters": {
+        "url": "https://api.mistral.ai/v1/ocr",
+        "method": "POST",
+        "options": {},
+        "jsonBody": "={\n  \"model\": \"mistral-ocr-latest\",\n  \"document\": {\n    \"type\": \"image_url\",\n    \"image_url\": \"{{ $json.url }}\"\n  }\n}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "mistralCloudApi"
+      },
+      "typeVersion": 4.2,
+      "notesInFlow": true,
+      "notes": "🖼️ Mistral OCR - 이미지 처리\n\n이미지를 분석하여 텍스트를 추출합니다.\n\n지원: 최대 10,000픽셀 이미지"
+    },
+    {
+      "id": "merge-results",
+      "name": "결과 병합",
+      "type": "n8n-nodes-base.merge",
+      "position": [720, 100],
+      "parameters": {"mode": "combine", "combinationMode": "mergeByPosition"},
+      "typeVersion": 3.2,
+      "notesInFlow": true,
+      "notes": "🔄 OCR 결과 병합\n\n문서와 이미지 OCR 결과를 병합합니다."
+    },
+    {
+      "id": "extract-text",
+      "name": "텍스트 추출",
+      "type": "n8n-nodes-base.code",
+      "position": [960, 100],
+      "parameters": {
+        "jsCode": "// OCR 결과에서 텍스트 추출\nconst results = [];\n\nfor (const item of $input.all()) {\n  const ocrResult = item.json;\n  \n  // 페이지별 텍스트 추출\n  let extractedText = '';\n  if (ocrResult.pages) {\n    extractedText = ocrResult.pages\n      .map((page, idx) => `[페이지 ${idx + 1}]\\n${page.markdown || page.text || ''}`)\n      .join('\\n\\n');\n  } else if (ocrResult.text) {\n    extractedText = ocrResult.text;\n  } else if (ocrResult.markdown) {\n    extractedText = ocrResult.markdown;\n  }\n  \n  results.push({\n    json: {\n      sourceUrl: item.json.url || 'N/A',\n      pageCount: ocrResult.pages?.length || 1,\n      extractedText: extractedText,\n      rawResponse: ocrResult\n    }\n  });\n}\n\nreturn results;"
+      },
+      "typeVersion": 2,
+      "notesInFlow": true,
+      "notes": "📝 텍스트 추출 및 정리\n\nOCR 결과에서 페이지별 텍스트를 추출하고 정리합니다.\n\n출력:\n- sourceUrl: 원본 URL\n- pageCount: 페이지 수\n- extractedText: 추출된 텍스트"
+    },
+    {
+      "id": "slack-notify",
+      "name": "Slack 결과 알림",
+      "type": "n8n-nodes-base.slack",
+      "position": [1200, 100],
+      "parameters": {
+        "select": "channel",
+        "channelId": {"__rl": true, "mode": "name", "value": "#general"},
+        "text": "=:page_facing_up: *Mistral OCR 처리 완료*\n\n:link: *원본:* {{ $json.sourceUrl }}\n:page_with_curl: *페이지 수:* {{ $json.pageCount }}\n\n:pencil: *추출된 텍스트 (미리보기)*\n```\n{{ $json.extractedText.substring(0, 500) }}{{ $json.extractedText.length > 500 ? '...' : '' }}\n```\n\n:information_source: 전체 텍스트는 n8n 실행 결과에서 확인하세요.",
+        "otherOptions": {}
+      },
+      "typeVersion": 2.3,
+      "notesInFlow": true,
+      "notes": "📢 Slack 결과 알림\n\nOCR 처리 결과를 Slack으로 전송합니다.\n\n⚠️ 설정 필요:\n- Slack 자격증명 연결"
+    },
+    {
+      "id": "note-intro",
+      "name": "워크플로우 안내",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [-200, -150],
+      "parameters": {
+        "width": 400,
+        "height": 350,
+        "content": "## 📄 Mistral OCR 문서/이미지 텍스트 추출\n\n### 기능\nMistral AI의 OCR 모델을 사용하여 PDF 문서나 이미지에서 텍스트를 추출합니다.\n\n### 지원 형식\n- **문서**: PDF (최대 64페이지)\n- **이미지**: PNG, JPG, JPEG, GIF, WEBP (최대 10,000픽셀)\n\n### 필수 설정\n1. **Mistral Cloud API 자격증명**\n   - https://console.mistral.ai 에서 API 키 발급\n2. **Slack 자격증명** - 결과 알림\n\n### 비용\n- 페이지당 약 $0.001 (매우 저렴)"
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "note-private",
+      "name": "비공개 파일 안내",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [400, -150],
+      "parameters": {
+        "width": 350,
+        "height": 200,
+        "color": 7,
+        "content": "### 💡 비공개 파일 처리\n\n비공개 파일의 경우:\n1. Mistral에 파일 업로드\n2. Signed URL 획득\n3. OCR 처리\n\n자세한 방법은 원본 워크플로우의 Example 2를 참고하세요."
+      },
+      "typeVersion": 1
+    }
+  ],
+  "connections": {
+    "수동 실행": {"main": [[{"node": "문서 URL 설정", "type": "main", "index": 0}, {"node": "이미지 URL 설정", "type": "main", "index": 0}]]},
+    "문서 URL 설정": {"main": [[{"node": "문서 OCR 처리", "type": "main", "index": 0}]]},
+    "이미지 URL 설정": {"main": [[{"node": "이미지 OCR 처리", "type": "main", "index": 0}]]},
+    "문서 OCR 처리": {"main": [[{"node": "결과 병합", "type": "main", "index": 0}]]},
+    "이미지 OCR 처리": {"main": [[{"node": "결과 병합", "type": "main", "index": 1}]]},
+    "결과 병합": {"main": [[{"node": "텍스트 추출", "type": "main", "index": 0}]]},
+    "텍스트 추출": {"main": [[{"node": "Slack 결과 알림", "type": "main", "index": 0}]]}
+  },
+  "settings": {"executionOrder": "v1"}
+}

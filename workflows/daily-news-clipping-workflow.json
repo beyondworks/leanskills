@@ -1,0 +1,146 @@
+{
+  "name": "Daily News Clipping (Perplexity + Slack)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "0 9 * * *" }]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "매일 아침 9시",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const today = new Date().toISOString().split('T')[0];\nreturn [\n  { json: { category: 'AI', categoryKr: 'AI 활용 팁', query: 'AI tools practical tips news 2026', dbId: '241003c7-f7be-806c-8a6e-c0e95ed37fe3', date: today } },\n  { json: { category: 'Design', categoryKr: 'UI/UX 디자인', query: 'UI UX design trends tips 2026', dbId: '241003c7-f7be-804f-a021-fc24777ca9ad', date: today } },\n  { json: { category: 'Branding', categoryKr: '브랜딩 전략', query: 'branding strategy tips 2026', dbId: '247003c7-f7be-803a-83f5-fd9494d24d62', date: today } },\n  { json: { category: 'Build', categoryKr: '웹개발 코딩', query: 'web development coding tips 2026', dbId: '247003c7-f7be-8074-a583-e1638fd3cfed', date: today } },\n  { json: { category: 'Marketing', categoryKr: '마케팅 전략', query: 'marketing growth strategy 2026', dbId: '247003c7-f7be-8035-83f4-d39480d66503', date: today } }\n];"
+      },
+      "id": "set-categories",
+      "name": "카테고리 정의",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "loop-categories",
+      "name": "카테고리 Loop",
+      "type": "n8n-nodes-base.loopOverItems",
+      "typeVersion": 1,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.perplexity.ai/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"sonar\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a professional news researcher. Return exactly 5 items as a valid JSON array with fields: title (string), url (string), source (string), summary (string - 1-2 sentences in Korean). Return ONLY the JSON array, no other text.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Find the latest 5 news about: {{ $json.query }}\"\n    }\n  ],\n  \"max_tokens\": 2000,\n  \"temperature\": 0.2,\n  \"return_citations\": true\n}",
+        "options": {}
+      },
+      "id": "perplexity-search",
+      "name": "Perplexity 검색",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "NcEOsIRwIqlaElTb",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst category = $('카테고리 Loop').first().json;\n\nlet content = '';\ntry {\n  content = input.choices?.[0]?.message?.content || '';\n} catch (e) {\n  content = '';\n}\n\nlet results = [];\ntry {\n  const jsonMatch = content.match(/\\[\\s*\\{[\\s\\S]*\\}\\s*\\]/g);\n  if (jsonMatch) {\n    results = JSON.parse(jsonMatch[0]);\n  } else {\n    const citations = input.citations || [];\n    results = citations.slice(0, 5).map((url, i) => ({\n      title: `${category.category} News ${i + 1}`,\n      url: url,\n      source: new URL(url).hostname,\n      summary: '뉴스 내용을 확인해주세요.'\n    }));\n  }\n} catch (e) {\n  const citations = input.citations || [];\n  results = citations.slice(0, 5).map((url, i) => ({\n    title: `${category.category} News ${i + 1}`,\n    url: url,\n    source: new URL(url).hostname,\n    summary: '뉴스 내용을 확인해주세요.'\n  }));\n}\n\nreturn results.slice(0, 5).map(item => ({\n  json: {\n    title: item.title || 'No Title',\n    url: item.url || '',\n    source: item.source || '',\n    summary: item.summary || '',\n    date: category.date,\n    category: category.category,\n    categoryKr: category.categoryKr,\n    dbId: category.dbId\n  }\n}));"
+      },
+      "id": "parse-perplexity",
+      "name": "결과 파싱",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": { "__rl": true, "mode": "id", "value": "={{ $json.dbId }}" },
+        "title": "={{ $json.title }}",
+        "propertiesUi": {
+          "propertyValues": [
+            { "key": "URL", "urlValue": "={{ $json.url }}" },
+            { "key": "Summary", "richTextValue": "={{ $json.summary }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "notion-save",
+      "name": "Notion 저장",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [1100, 300],
+      "credentials": {
+        "notionApi": {
+          "id": "xw5kbbLStDNvEvBq",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const today = new Date().toISOString().split('T')[0];\nconst categories = [\n  { name: 'AI 활용 팁', query: 'AI tools practical tips' },\n  { name: 'UI/UX 디자인', query: 'UI UX design trends' },\n  { name: '브랜딩 전략', query: 'branding strategy tips' },\n  { name: '웹개발 코딩', query: 'web development coding tips' },\n  { name: '마케팅 전략', query: 'marketing growth strategy' }\n];\n\nconst blocks = [\n  { type: 'header', text: { type: 'plain_text', text: `📰 Daily News Clipping - ${today}` } },\n  { type: 'section', text: { type: 'mrkdwn', text: `5개 카테고리 × 5개 = *25개 뉴스*가 Notion에 저장되었습니다.\\n🤖 Powered by Perplexity AI` } },\n  { type: 'divider' }\n];\n\nfor (const cat of categories) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*${cat.name}*\\n검색어: \\`${cat.query}\\`` } });\n}\n\nblocks.push(\n  { type: 'divider' },\n  { type: 'context', elements: [{ type: 'mrkdwn', text: '🔗 <https://notion.so|Notion에서 확인하기> | n8n 자동화' }] }\n);\n\nreturn [{ json: { blocks: JSON.stringify(blocks), text: `📰 Daily News Clipping - ${today} (25개 저장 완료)` } }];"
+      },
+      "id": "slack-format",
+      "name": "Slack 포맷 생성",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 100]
+    },
+    {
+      "parameters": {
+        "operation": "post",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "auto-news",
+          "mode": "name"
+        },
+        "text": "={{ $json.text }}",
+        "otherOptions": {
+          "includeLinkToWorkflow": false,
+          "blocksUi": "={{ $json.blocks }}"
+        }
+      },
+      "id": "slack-send",
+      "name": "Slack 뉴스 알림",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [1760, 100],
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "매일 아침 9시": { "main": [[{ "node": "카테고리 정의", "type": "main", "index": 0 }]] },
+    "카테고리 정의": { "main": [[{ "node": "카테고리 Loop", "type": "main", "index": 0 }]] },
+    "카테고리 Loop": { "main": [
+      [{ "node": "Perplexity 검색", "type": "main", "index": 0 }],
+      [{ "node": "Slack 포맷 생성", "type": "main", "index": 0 }]
+    ] },
+    "Perplexity 검색": { "main": [[{ "node": "결과 파싱", "type": "main", "index": 0 }]] },
+    "결과 파싱": { "main": [[{ "node": "Notion 저장", "type": "main", "index": 0 }]] },
+    "Notion 저장": { "main": [[{ "node": "카테고리 Loop", "type": "main", "index": 0 }]] },
+    "Slack 포맷 생성": { "main": [[{ "node": "Slack 뉴스 알림", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Seoul",
+    "saveExecutionProgress": true,
+    "saveDataSuccessExecution": "all"
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "name": "[재무] 월간 리포트 (매월 1일 9시)",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "매월 1일 9시",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 1 * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ssh",
+      "name": "월간 재무 리포트",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [250, 0],
+      "parameters": {
+        "operation": "executeCommand",
+        "command": "python3 /Users/yoogeon/.claude/skills/beyondworks-assistant/assistant.py finance \"monthly\" monthly_report"
+      },
+      "credentials": {
+        "sshPassword": {
+          "id": "cred_ssh_localhost",
+          "name": "SSH localhost (Mac)"
+        }
+      }
+    },
+    {
+      "id": "parse",
+      "name": "응답 파싱",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 0],
+      "parameters": {
+        "jsCode": "const stdout = $input.first().json.stdout || '{}';\n\nlet response = '월간 재무 리포트를 생성할 수 없습니다.';\ntry {\n  const result = JSON.parse(stdout);\n  response = result.response || response;\n} catch (e) {\n  response = '파싱 오류: ' + e.message;\n}\n\nreturn [{ json: { response: `💰 *월간 재무 리포트*\\n${'═'.repeat(20)}\\n\\n${response}` } }];"
+      }
+    },
+    {
+      "id": "slack",
+      "name": "Slack 전송",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [750, 0],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": {
+          "__rl": true,
+          "mode": "name",
+          "value": "general"
+        },
+        "text": "={{ $json.response }}",
+        "otherOptions": {}
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "67xs3j3Zo3E8M20w",
+          "name": "Slack account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "매월 1일 9시": {
+      "main": [[{"node": "월간 재무 리포트", "type": "main", "index": 0}]]
+    },
+    "월간 재무 리포트": {
+      "main": [[{"node": "응답 파싱", "type": "main", "index": 0}]]
+    },
+    "응답 파싱": {
+      "main": [[{"node": "Slack 전송", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Seoul"
+  }
+}

@@ -1,0 +1,244 @@
+{
+  "name": "[뉴스분석] 금융/주식시장 데일리 뉴스 AI 분석 리포트",
+  "nodes": [
+    {
+      "id": "schedule-trigger",
+      "name": "매일 오전 8시 트리거",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [0, 0],
+      "parameters": {
+        "rule": {"interval": [{"triggerAtHour": 8}]}
+      },
+      "typeVersion": 1.2,
+      "notesInFlow": true,
+      "notes": "⏰ 스케줄 트리거\n\n매일 오전 8시에 자동으로 워크플로우를 실행합니다.\n\n⚠️ 시간대: 한국 표준시 (KST)"
+    },
+    {
+      "id": "rss-config",
+      "name": "RSS 소스 설정",
+      "type": "n8n-nodes-base.set",
+      "position": [240, 0],
+      "parameters": {
+        "options": {},
+        "assignments": {
+          "assignments": [
+            {"id": "1", "name": "rssUrls", "type": "array", "value": "=[\"https://feeds.finance.yahoo.com/rss/2.0/headline?s=^KS11&region=KR&lang=ko-KR\", \"https://www.investing.com/rss/news.rss\", \"https://feeds.bloomberg.com/markets/news.rss\"]"}
+          ]
+        }
+      },
+      "typeVersion": 3.4,
+      "notesInFlow": true,
+      "notes": "📰 RSS 피드 소스 설정\n\n분석할 금융 뉴스 RSS 피드 URL 목록입니다.\n\n현재 설정:\n- Yahoo Finance 한국\n- Investing.com\n- Bloomberg Markets"
+    },
+    {
+      "id": "split-urls",
+      "name": "URL 분리",
+      "type": "n8n-nodes-base.splitOut",
+      "position": [480, 0],
+      "parameters": {"fieldToSplitOut": "rssUrls"},
+      "typeVersion": 1,
+      "notesInFlow": true,
+      "notes": "🔀 RSS URL 분리\n\n배열의 각 RSS URL을 개별 아이템으로 분리합니다."
+    },
+    {
+      "id": "fetch-rss",
+      "name": "RSS 피드 수집",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "position": [720, 0],
+      "parameters": {"url": "={{ $json.rssUrls }}"},
+      "onError": "continueRegularOutput",
+      "maxTries": 2,
+      "retryOnFail": true,
+      "typeVersion": 1.2,
+      "notesInFlow": true,
+      "notes": "📡 RSS 피드 수집\n\n각 RSS 피드에서 뉴스 기사를 수집합니다.\n\n오류 시 2회 재시도 후 다음으로 진행"
+    },
+    {
+      "id": "filter-recent",
+      "name": "최근 24시간 필터",
+      "type": "n8n-nodes-base.filter",
+      "position": [960, 0],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {"version": 2, "caseSensitive": true},
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "1",
+              "operator": {"type": "dateTime", "operation": "after"},
+              "leftValue": "={{ $json.pubDate || $json.isoDate }}",
+              "rightValue": "={{ $now.minus(24, 'hours').toISO() }}"
+            }
+          ]
+        }
+      },
+      "onError": "continueRegularOutput",
+      "typeVersion": 2.2,
+      "notesInFlow": true,
+      "notes": "🕐 최근 기사 필터\n\n최근 24시간 이내에 발행된 기사만 선택합니다."
+    },
+    {
+      "id": "normalize-data",
+      "name": "데이터 정규화",
+      "type": "n8n-nodes-base.set",
+      "position": [1200, 0],
+      "parameters": {
+        "options": {},
+        "assignments": {
+          "assignments": [
+            {"id": "1", "name": "title", "type": "string", "value": "={{ $json.title }}"},
+            {"id": "2", "name": "description", "type": "string", "value": "={{ $json.contentSnippet || $json.description || '' }}"},
+            {"id": "3", "name": "link", "type": "string", "value": "={{ $json.link }}"},
+            {"id": "4", "name": "pubDate", "type": "string", "value": "={{ $json.pubDate || $json.isoDate }}"},
+            {"id": "5", "name": "source", "type": "string", "value": "={{ $json.creator || $json.author || 'Unknown' }}"}
+          ]
+        }
+      },
+      "typeVersion": 3.4,
+      "notesInFlow": true,
+      "notes": "📋 데이터 정규화\n\n다양한 RSS 형식을 통일된 구조로 변환합니다."
+    },
+    {
+      "id": "classify-article",
+      "name": "기사 분류 (AI)",
+      "type": "@n8n/n8n-nodes-langchain.textClassifier",
+      "position": [1440, 0],
+      "parameters": {
+        "options": {},
+        "inputText": "=제목: {{ $json.title }}\n요약: {{ $json.description }}",
+        "categories": {
+          "categories": [
+            {"category": "finance", "description": "금융, 은행, 투자, 보험 관련 뉴스"},
+            {"category": "stock", "description": "주식, 증권, 코스피, 코스닥 관련 뉴스"},
+            {"category": "crypto", "description": "암호화폐, 비트코인, 블록체인 뉴스"},
+            {"category": "economy", "description": "경제, GDP, 인플레이션 관련 뉴스"},
+            {"category": "other", "description": "기타 분류되지 않는 뉴스"}
+          ]
+        }
+      },
+      "typeVersion": 1,
+      "notesInFlow": true,
+      "notes": "🏷️ AI 기사 분류\n\n각 기사를 카테고리별로 분류합니다:\n- finance: 금융\n- stock: 주식\n- crypto: 암호화폐\n- economy: 경제\n- other: 기타"
+    },
+    {
+      "id": "openai-classifier",
+      "name": "OpenAI 분류 모델",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "position": [1440, 200],
+      "parameters": {
+        "options": {"temperature": 0},
+        "model": "gpt-4o-mini"
+      },
+      "typeVersion": 1.2,
+      "notesInFlow": true,
+      "notes": "🧠 OpenAI GPT-4o-mini\n\n빠르고 정확한 텍스트 분류\n\n⚠️ 설정 필요:\n- OpenAI API 자격증명"
+    },
+    {
+      "id": "aggregate-articles",
+      "name": "기사 집계",
+      "type": "n8n-nodes-base.aggregate",
+      "position": [1680, 0],
+      "parameters": {
+        "options": {},
+        "aggregate": "aggregateAllItemData"
+      },
+      "typeVersion": 1,
+      "notesInFlow": true,
+      "notes": "📊 분류된 기사 집계\n\n모든 분류된 기사를 하나로 집계합니다."
+    },
+    {
+      "id": "summarize-articles",
+      "name": "주요 기사 요약 (AI)",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [1920, 0],
+      "parameters": {
+        "text": "=다음 금융/주식 뉴스 기사들을 분석하고 한국어로 요약 리포트를 작성하세요.\n\n기사 목록:\n{{ $json.data.map((a, i) => `${i+1}. [${a.output || 'other'}] ${a.title}`).join('\\n') }}\n\n다음 형식으로 응답:\n1. 오늘의 시장 동향 요약 (3-5문장)\n2. 주요 뉴스 TOP 5 (제목과 핵심 내용)\n3. 투자자 주의 사항\n\nJSON 형식으로 출력:\n{\"summary\": \"시장 동향\", \"topNews\": [{\"title\": \"\", \"content\": \"\"}], \"caution\": \"주의 사항\"}",
+        "options": {}
+      },
+      "retryOnFail": true,
+      "typeVersion": 3,
+      "notesInFlow": true,
+      "notes": "📝 AI 뉴스 요약\n\n수집된 뉴스를 분석하여 한국어 리포트를 생성합니다.\n\n생성 내용:\n- 시장 동향 요약\n- TOP 5 주요 뉴스\n- 투자자 주의 사항"
+    },
+    {
+      "id": "openai-summary",
+      "name": "OpenAI 요약 모델",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "position": [1920, 200],
+      "parameters": {
+        "options": {"temperature": 0.3},
+        "model": "gpt-4o"
+      },
+      "typeVersion": 1.3,
+      "notesInFlow": true,
+      "notes": "🧠 OpenAI GPT-4o\n\n고품질 뉴스 요약 및 분석"
+    },
+    {
+      "id": "json-parser",
+      "name": "JSON 파서",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "position": [2080, 200],
+      "parameters": {
+        "jsonSchemaExample": "{\"summary\": \"string\", \"topNews\": [{\"title\": \"string\", \"content\": \"string\"}], \"caution\": \"string\"}"
+      },
+      "typeVersion": 1.2,
+      "notes": "JSON 출력 파싱"
+    },
+    {
+      "id": "format-report",
+      "name": "리포트 포맷팅",
+      "type": "n8n-nodes-base.code",
+      "position": [2160, 0],
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst output = data.output || data;\n\nconst today = new Date().toLocaleDateString('ko-KR', {\n  year: 'numeric',\n  month: 'long',\n  day: 'numeric',\n  weekday: 'long'\n});\n\nlet slackText = `:chart_with_upwards_trend: *${today} 금융/주식 시장 데일리 리포트*\\n\\n`;\nslackText += `:memo: *시장 동향 요약*\\n${output.summary || '요약 없음'}\\n\\n`;\n\nslackText += `:newspaper: *주요 뉴스 TOP 5*\\n`;\nif (output.topNews && output.topNews.length > 0) {\n  output.topNews.forEach((news, i) => {\n    slackText += `${i+1}. *${news.title}*\\n   ${news.content}\\n`;\n  });\n} else {\n  slackText += '주요 뉴스 없음\\n';\n}\n\nslackText += `\\n:warning: *투자자 주의 사항*\\n${output.caution || '특별한 주의 사항 없음'}`;\n\nreturn [{\n  json: {\n    slackMessage: slackText,\n    reportData: output,\n    generatedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "typeVersion": 2,
+      "notesInFlow": true,
+      "notes": "📋 리포트 포맷팅\n\nAI 분석 결과를 Slack 메시지 형식으로 변환합니다."
+    },
+    {
+      "id": "slack-notify",
+      "name": "Slack 리포트 전송",
+      "type": "n8n-nodes-base.slack",
+      "position": [2400, 0],
+      "parameters": {
+        "select": "channel",
+        "channelId": {"__rl": true, "mode": "name", "value": "#general"},
+        "text": "={{ $json.slackMessage }}",
+        "otherOptions": {}
+      },
+      "typeVersion": 2.3,
+      "notesInFlow": true,
+      "notes": "📢 Slack 리포트 전송\n\n완성된 데일리 리포트를 Slack으로 전송합니다.\n\n⚠️ 설정 필요:\n- Slack 자격증명 연결\n- 채널 확인"
+    },
+    {
+      "id": "note-intro",
+      "name": "워크플로우 안내",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [-200, -300],
+      "parameters": {
+        "width": 500,
+        "height": 400,
+        "content": "## 📈 금융/주식 시장 데일리 뉴스 AI 분석\n\n### 기능\n1. 매일 오전 8시에 자동으로 금융 뉴스 수집\n2. AI가 기사를 카테고리별로 분류 (금융/주식/암호화폐/경제)\n3. 주요 뉴스 TOP 5 선정 및 요약 리포트 생성\n4. Slack으로 데일리 리포트 전송\n\n### 필수 설정\n1. **OpenAI API** - 기사 분류 및 요약\n2. **Slack 자격증명** - 리포트 전송\n\n### RSS 피드 커스터마이징\n'RSS 소스 설정' 노드에서 원하는 뉴스 소스 추가 가능:\n- 국내: 매일경제, 한국경제 등\n- 해외: CNBC, Reuters 등"
+      },
+      "typeVersion": 1
+    }
+  ],
+  "connections": {
+    "매일 오전 8시 트리거": {"main": [[{"node": "RSS 소스 설정", "type": "main", "index": 0}]]},
+    "RSS 소스 설정": {"main": [[{"node": "URL 분리", "type": "main", "index": 0}]]},
+    "URL 분리": {"main": [[{"node": "RSS 피드 수집", "type": "main", "index": 0}]]},
+    "RSS 피드 수집": {"main": [[{"node": "최근 24시간 필터", "type": "main", "index": 0}]]},
+    "최근 24시간 필터": {"main": [[{"node": "데이터 정규화", "type": "main", "index": 0}]]},
+    "데이터 정규화": {"main": [[{"node": "기사 분류 (AI)", "type": "main", "index": 0}]]},
+    "기사 분류 (AI)": {"main": [[{"node": "기사 집계", "type": "main", "index": 0}]]},
+    "OpenAI 분류 모델": {"ai_languageModel": [[{"node": "기사 분류 (AI)", "type": "ai_languageModel", "index": 0}]]},
+    "기사 집계": {"main": [[{"node": "주요 기사 요약 (AI)", "type": "main", "index": 0}]]},
+    "주요 기사 요약 (AI)": {"main": [[{"node": "리포트 포맷팅", "type": "main", "index": 0}]]},
+    "OpenAI 요약 모델": {"ai_languageModel": [[{"node": "주요 기사 요약 (AI)", "type": "ai_languageModel", "index": 0}]]},
+    "JSON 파서": {"ai_outputParser": [[{"node": "주요 기사 요약 (AI)", "type": "ai_outputParser", "index": 0}]]},
+    "리포트 포맷팅": {"main": [[{"node": "Slack 리포트 전송", "type": "main", "index": 0}]]}
+  },
+  "settings": {"executionOrder": "v1"}
+}

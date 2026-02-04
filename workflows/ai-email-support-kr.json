@@ -1,0 +1,284 @@
+{
+  "name": "[AI고객지원] 자가학습 이메일 AI 서포트",
+  "nodes": [
+    {
+      "id": "email-trigger",
+      "name": "이메일 수신 트리거",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "position": [0, 0],
+      "parameters": {
+        "simple": false,
+        "filters": {},
+        "options": {},
+        "pollTimes": {"item": [{"mode": "everyMinute"}]}
+      },
+      "typeVersion": 1.3,
+      "notesInFlow": true,
+      "notes": "📧 이메일 수신 모니터링\n\nGmail 받은편지함을 1분마다 확인합니다.\n\n⚠️ 설정 필요:\n- Gmail OAuth2 자격증명 연결"
+    },
+    {
+      "id": "classifier",
+      "name": "지원요청 분류 (AI)",
+      "type": "@n8n/n8n-nodes-langchain.textClassifier",
+      "position": [240, 0],
+      "parameters": {
+        "options": {},
+        "inputText": "=제목: {{ $json.subject }}\n\n내용:\n{{ $json.text }}",
+        "categories": {
+          "categories": [
+            {"category": "support", "description": "고객 지원 요청, 문의, 질문"},
+            {"category": "other", "description": "광고, 스팸, 기타 이메일"}
+          ]
+        }
+      },
+      "typeVersion": 1.1,
+      "notesInFlow": true,
+      "notes": "🤖 AI 이메일 분류\n\n수신된 이메일이 고객 지원 요청인지 분류합니다.\n\n분류 결과:\n- support: 지원 요청 → 다음 단계로 진행\n- other: 광고/스팸 → 무시"
+    },
+    {
+      "id": "gemini-classifier",
+      "name": "Gemini 분류 모델",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "position": [240, 200],
+      "parameters": {
+        "options": {"temperature": 0},
+        "modelName": "models/gemini-flash-lite-latest"
+      },
+      "typeVersion": 1,
+      "notesInFlow": true,
+      "notes": "🧠 Google Gemini Flash Lite\n\n빠르고 저렴한 분류 작업에 최적화된 모델\n\n⚠️ 설정 필요:\n- Google Gemini API 키"
+    },
+    {
+      "id": "get-kb",
+      "name": "지식베이스 조회",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [480, 0],
+      "parameters": {
+        "sheetName": {"__rl": true, "mode": "list", "value": ""},
+        "documentId": {"__rl": true, "mode": "list", "value": ""}
+      },
+      "typeVersion": 4.7,
+      "notesInFlow": true,
+      "notes": "📚 지식베이스 조회\n\nGoogle Sheets에 저장된 Q&A 데이터를 가져옵니다.\n\n⚠️ 설정 필요:\n1. Google Sheets 자격증명 연결\n2. 시트 선택 (Question, Answer 컬럼 필요)"
+    },
+    {
+      "id": "aggregate-kb",
+      "name": "지식 컨텍스트 통합",
+      "type": "n8n-nodes-base.aggregate",
+      "position": [720, 0],
+      "parameters": {
+        "options": {},
+        "aggregate": "aggregateAllItemData"
+      },
+      "typeVersion": 1,
+      "notesInFlow": true,
+      "notes": "📊 지식베이스 데이터 통합\n\n모든 Q&A 데이터를 하나의 컨텍스트로 통합합니다."
+    },
+    {
+      "id": "find-answer",
+      "name": "답변 검색 (AI)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "position": [960, 0],
+      "parameters": {
+        "text": "=<instructions>\n지식베이스에서 고객 질문과 관련된 답변을 찾으세요.\n\n답변을 찾은 경우:\n- answerFound: true\n- responseEmailHtml: 고객에게 보낼 HTML 이메일 작성\n- summarizedQuestion: null\n\n답변을 찾지 못한 경우:\n- answerFound: false\n- responseEmailHtml: null\n- summarizedQuestion: 고객 질문 요약 (한 문장)\n</instructions>\n\n<customer_email>\n{{ $('이메일 수신 트리거').item.json.text }}\n</customer_email>\n\n<knowledge_base>\n{{ $('지식 컨텍스트 통합').last().json.data.toJsonString() }}\n</knowledge_base>",
+        "batching": {},
+        "messages": {"messageValues": [{"message": "당신은 고객 지원 AI 에이전트입니다. 지식베이스를 분석하여 고객 질문에 답변하세요. JSON 형식으로만 응답하세요."}]},
+        "promptType": "define"
+      },
+      "typeVersion": 1.7,
+      "notesInFlow": true,
+      "notes": "🔍 AI 답변 검색\n\n지식베이스에서 고객 질문과 매칭되는 답변을 검색합니다.\n\n결과:\n- 답변 발견 → 자동 응답 발송\n- 답변 없음 → 담당자에게 전달"
+    },
+    {
+      "id": "gemini-answer",
+      "name": "Gemini 답변 모델",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "position": [960, 200],
+      "parameters": {
+        "options": {"temperature": 0},
+        "modelName": "models/gemini-flash-latest"
+      },
+      "typeVersion": 1,
+      "notesInFlow": true,
+      "notes": "🧠 Google Gemini Flash\n\n답변 검색 및 생성을 위한 고성능 모델"
+    },
+    {
+      "id": "parse-response",
+      "name": "AI 응답 파싱",
+      "type": "n8n-nodes-base.set",
+      "position": [1200, 0],
+      "parameters": {
+        "mode": "raw",
+        "options": {},
+        "jsonOutput": "={{ $json.text.replace(/^```json\\s*|\\s*```$/g, '') }}"
+      },
+      "typeVersion": 3.4,
+      "notesInFlow": true,
+      "notes": "🔄 JSON 파싱\n\nAI 응답에서 JSON 마크다운을 제거하고 순수 JSON으로 변환합니다."
+    },
+    {
+      "id": "answer-check",
+      "name": "답변 확인 분기",
+      "type": "n8n-nodes-base.if",
+      "position": [1440, 0],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {"version": 2, "leftValue": "", "caseSensitive": true, "typeValidation": "strict"},
+          "combinator": "and",
+          "conditions": [
+            {"id": "cond1", "operator": {"type": "boolean", "operation": "true", "singleValue": true}, "leftValue": "={{ $json.answerFound }}", "rightValue": ""}
+          ]
+        }
+      },
+      "typeVersion": 2.2,
+      "notesInFlow": true,
+      "notes": "🔀 답변 유무 확인\n\n답변 발견 시 → 자동 응답 발송\n답변 없음 → 담당자에게 전달"
+    },
+    {
+      "id": "send-ai-answer",
+      "name": "AI 답변 발송",
+      "type": "n8n-nodes-base.gmail",
+      "position": [1680, -100],
+      "parameters": {
+        "sendTo": "={{ $('이메일 수신 트리거').last().json.from.value[0].address }}",
+        "message": "={{ $json.responseEmailHtml }}",
+        "options": {"appendAttribution": false},
+        "subject": "=Re: {{ $('이메일 수신 트리거').last().json.subject }}"
+      },
+      "typeVersion": 2.1,
+      "notesInFlow": true,
+      "notes": "📤 자동 답변 발송\n\nAI가 지식베이스에서 찾은 답변을 고객에게 발송합니다."
+    },
+    {
+      "id": "ask-human",
+      "name": "담당자에게 전달",
+      "type": "n8n-nodes-base.gmail",
+      "position": [1680, 100],
+      "parameters": {
+        "message": "=안녕하세요,\n\n자동화 시스템이 답변을 찾지 못한 고객 문의가 있습니다.\n\n**고객 질문 요약:** {{ $json.summarizedQuestion }}\n\n---\n발신자: {{ $('이메일 수신 트리거').item.json.from.value[0].address }}\n제목: {{ $('이메일 수신 트리거').item.json.subject }}\n\n{{ $('이메일 수신 트리거').item.json.text }}\n---\n\n**조치 필요:**\n이 이메일에 답변을 작성해 주세요.\n답변은 자동으로 고객에게 전달되고 지식베이스에 추가됩니다.",
+        "options": {
+          "responseFormTitle": "고객 문의 답변",
+          "messageButtonLabel": "답변 제출",
+          "responseFormDescription": "고객 문의에 대한 답변을 입력하세요. 이 답변은 고객에게 전달되고 지식베이스에 저장됩니다."
+        },
+        "subject": "[고객지원] 답변이 필요한 문의",
+        "operation": "sendAndWait",
+        "responseType": "freeText"
+      },
+      "typeVersion": 2.1,
+      "notesInFlow": true,
+      "notes": "👤 담당자 전달\n\nAI가 답변을 찾지 못한 경우 담당자에게 이메일로 전달합니다.\n\n⚠️ 설정 필요:\n- 담당자 이메일 주소 (To 필드)"
+    },
+    {
+      "id": "create-qa",
+      "name": "Q&A 생성 (AI)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "position": [1920, 100],
+      "parameters": {
+        "text": "=담당자의 답변을 기반으로 재사용 가능한 Q&A를 생성하세요.\n\n원본 고객 질문:\n{{ $('이메일 수신 트리거').last().json.text }}\n\n담당자 답변:\n{{ $('담당자에게 전달').last().json.data.text }}\n\nJSON 형식으로 응답:\n{\"question\": \"일반화된 질문\", \"answer\": \"정리된 답변\"}",
+        "batching": {},
+        "messages": {"messageValues": [{"message": "지식베이스 전문가로서 Q&A 쌍을 생성하세요. 개인정보는 제거하고 재사용 가능한 형태로 일반화하세요."}]},
+        "promptType": "define",
+        "hasOutputParser": true
+      },
+      "typeVersion": 1.7,
+      "notesInFlow": true,
+      "notes": "🔄 Q&A 자동 생성\n\n담당자의 답변을 기반으로 지식베이스에 추가할 Q&A를 생성합니다.\n\n- 질문: 고객 문의를 일반화\n- 답변: 담당자 답변을 정리"
+    },
+    {
+      "id": "gemini-qa",
+      "name": "Gemini Q&A 모델",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "position": [1920, 300],
+      "parameters": {
+        "options": {"temperature": 0},
+        "modelName": "models/gemini-flash-latest"
+      },
+      "typeVersion": 1,
+      "notes": "Q&A 생성용 Gemini 모델"
+    },
+    {
+      "id": "output-parser",
+      "name": "JSON 출력 파서",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "position": [2080, 300],
+      "parameters": {
+        "jsonSchemaExample": "{\"question\": \"질문 텍스트\", \"answer\": \"답변 텍스트\"}"
+      },
+      "typeVersion": 1.3,
+      "notes": "Q&A JSON 파싱"
+    },
+    {
+      "id": "add-to-kb",
+      "name": "지식베이스 추가",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [2160, 100],
+      "parameters": {
+        "columns": {
+          "value": {
+            "Answer": "={{ $json.output.answer }}",
+            "Question": "={{ $json.output.question }}"
+          },
+          "schema": [
+            {"id": "Question", "type": "string", "display": true, "displayName": "Question"},
+            {"id": "Answer", "type": "string", "display": true, "displayName": "Answer"}
+          ],
+          "mappingMode": "defineBelow"
+        },
+        "options": {},
+        "operation": "append",
+        "sheetName": {"__rl": true, "mode": "list", "value": ""},
+        "documentId": {"__rl": true, "mode": "list", "value": ""}
+      },
+      "typeVersion": 4.7,
+      "notesInFlow": true,
+      "notes": "📝 지식베이스 업데이트\n\n새로운 Q&A를 Google Sheets에 추가합니다.\n\n⚠️ 설정 필요:\n- Google Sheets 자격증명 연결\n- 동일한 시트 선택"
+    },
+    {
+      "id": "slack-notify",
+      "name": "Slack 알림",
+      "type": "n8n-nodes-base.slack",
+      "position": [2400, 0],
+      "parameters": {
+        "select": "channel",
+        "channelId": {"__rl": true, "mode": "name", "value": "#general"},
+        "text": "=:robot_face: *AI 고객지원 처리 완료*\n\n:email: *고객 문의:* {{ $('이메일 수신 트리거').last().json.subject }}\n:bust_in_silhouette: *발신자:* {{ $('이메일 수신 트리거').last().json.from.value[0].address }}\n\n:white_check_mark: *처리 상태:* {{ $('답변 확인 분기').last().json.answerFound ? 'AI 자동 답변 발송' : '담당자 답변 후 지식베이스 업데이트' }}",
+        "otherOptions": {}
+      },
+      "typeVersion": 2.3,
+      "notesInFlow": true,
+      "notes": "📢 Slack 알림\n\n고객 지원 처리 결과를 Slack으로 알립니다.\n\n⚠️ 설정 필요:\n- Slack 자격증명 연결"
+    },
+    {
+      "id": "note-intro",
+      "name": "워크플로우 안내",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [-300, -300],
+      "parameters": {
+        "width": 550,
+        "height": 400,
+        "content": "## 🤖 자가학습 AI 이메일 고객지원\n\n### 기능\n1. 이메일 수신 시 AI가 지식베이스에서 답변 검색\n2. 답변 발견 → 자동 응답 발송\n3. 답변 없음 → 담당자에게 전달\n4. 담당자 답변 → 새로운 Q&A로 지식베이스 자동 업데이트\n\n### 필수 설정\n1. **Gmail 자격증명** - 이메일 수신/발송\n2. **Google Sheets** - 지식베이스 (Question, Answer 컬럼)\n3. **Google Gemini API** - AI 분류 및 답변 생성\n4. **Slack 자격증명** - 결과 알림\n\n### 지식베이스 시트 형식\n| Question | Answer |\n|----------|--------|\n| 배송은 얼마나 걸리나요? | 일반 배송 3-5일, 빠른 배송 1-2일 |\n| 반품은 어떻게 하나요? | 구매 후 7일 이내 고객센터 연락 |"
+      },
+      "typeVersion": 1
+    }
+  ],
+  "connections": {
+    "이메일 수신 트리거": {"main": [[{"node": "지원요청 분류 (AI)", "type": "main", "index": 0}]]},
+    "지원요청 분류 (AI)": {"main": [[{"node": "지식베이스 조회", "type": "main", "index": 0}]]},
+    "Gemini 분류 모델": {"ai_languageModel": [[{"node": "지원요청 분류 (AI)", "type": "ai_languageModel", "index": 0}]]},
+    "지식베이스 조회": {"main": [[{"node": "지식 컨텍스트 통합", "type": "main", "index": 0}]]},
+    "지식 컨텍스트 통합": {"main": [[{"node": "답변 검색 (AI)", "type": "main", "index": 0}]]},
+    "답변 검색 (AI)": {"main": [[{"node": "AI 응답 파싱", "type": "main", "index": 0}]]},
+    "Gemini 답변 모델": {"ai_languageModel": [[{"node": "답변 검색 (AI)", "type": "ai_languageModel", "index": 0}]]},
+    "AI 응답 파싱": {"main": [[{"node": "답변 확인 분기", "type": "main", "index": 0}]]},
+    "답변 확인 분기": {"main": [[{"node": "AI 답변 발송", "type": "main", "index": 0}], [{"node": "담당자에게 전달", "type": "main", "index": 0}]]},
+    "AI 답변 발송": {"main": [[{"node": "Slack 알림", "type": "main", "index": 0}]]},
+    "담당자에게 전달": {"main": [[{"node": "Q&A 생성 (AI)", "type": "main", "index": 0}]]},
+    "Q&A 생성 (AI)": {"main": [[{"node": "지식베이스 추가", "type": "main", "index": 0}]]},
+    "Gemini Q&A 모델": {"ai_languageModel": [[{"node": "Q&A 생성 (AI)", "type": "ai_languageModel", "index": 0}]]},
+    "JSON 출력 파서": {"ai_outputParser": [[{"node": "Q&A 생성 (AI)", "type": "ai_outputParser", "index": 0}]]},
+    "지식베이스 추가": {"main": [[{"node": "Slack 알림", "type": "main", "index": 0}]]}
+  },
+  "settings": {"executionOrder": "v1"}
+}

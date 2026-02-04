@@ -1,15 +1,29 @@
 # Secrets and config
-notion_config.json
-gmail_credentials.json
-gmail_token.json
-.env
-conversation_history.json
+**/notion_config.json
+**/gmail_credentials.json
+**/gmail_token.json
+**/.env
+!**/.env.example
+
+# Python
 *.pyc
 __pycache__/
+.venv/
 
 # Generated files
-transcript.txt
-blog_post.md
-content.json
-metadata.json
+**/transcript.txt
+**/blog_post.md
+**/content.json
+**/metadata.json
 *.png
+
+# Runtime data
+**/conversation_history.json
+**/data/history_*.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

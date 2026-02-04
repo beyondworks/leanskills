@@ -3,7 +3,7 @@ import os
 import json
 import subprocess
 from fetch_metadata import fetch_metadata
-# process_content and save_to_notion will be imported after creation
+from slack_notifier import send_slack_notification
 
 def run_pipeline(video_url):
     print(f"🚀 Starting Repurposing Pipeline for: {video_url}")
@@ -51,23 +51,35 @@ def run_pipeline(video_url):
     print("\n4️⃣  Saving to Notion...")
     subprocess.run([sys.executable, "src/save_to_notion.py"], check=True)
 
-    # 5. Email Notification
-    print("\n5️⃣  Sending Email Notification...")
+    # 5. Slack Notification (#insights)
+    print("\n5️⃣  Sending Slack Notification...")
 
-    # Try to get title for subject
-    email_subject = "🚀 Content Repurposing Complete"
-    email_body = f"Your video ({video_url}) has been processed and saved to Notion."
-
+    title = ""
+    category = ""
+    tags = ""
     try:
         with open("content.json") as f:
             c_data = json.load(f)
-            title = c_data.get("meta", {}).get("title") or c_data.get("blog_title")
-            if title:
-                email_subject = f"✅ Blog Post Ready: {title}"
+            meta = c_data.get("meta", {})
+            title = meta.get("title") or c_data.get("blog_title") or ""
+            category = meta.get("category", "")
+            tags_list = meta.get("tags", [])
+            if tags_list:
+                tags = " ".join(f"#{t}" for t in tags_list[:5])
     except:
         pass
 
-    subprocess.run([sys.executable, "src/email_notifier.py", email_subject, email_body], check=False)
+    slack_msg = f"*Content Repurposing Complete*\n"
+    if title:
+        slack_msg += f"*{title}*\n"
+    if category:
+        slack_msg += f"Category: {category}\n"
+    slack_msg += f"Video: {video_url}\n"
+    if tags:
+        slack_msg += f"{tags}\n"
+    slack_msg += "Notion saved"
+
+    send_slack_notification(slack_msg, "insights")
 
     print("\n✅ All Done!")
 

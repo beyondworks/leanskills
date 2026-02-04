@@ -1,0 +1,539 @@
+{
+  "name": "[스케줄비서] Notion 일정 관리 + Slack 통합",
+  "nodes": [
+    {
+      "id": "slack-trigger",
+      "name": "Slack 메시지 수신",
+      "type": "n8n-nodes-base.slackTrigger",
+      "position": [0, 400],
+      "parameters": {
+        "event": "message",
+        "options": {}
+      },
+      "webhookId": "schedule-slack-trigger",
+      "typeVersion": 1,
+      "notes": "📨 Slack #schedule 채널에서 메시지 수신\n\n⚠️ 설정:\n1. Slack 자격증명 연결\n2. Event Subscriptions 설정 필요"
+    },
+    {
+      "id": "morning-trigger",
+      "name": "매일 오전 9시 브리핑",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [0, 800],
+      "parameters": {
+        "rule": {
+          "interval": [{"field": "cronExpression", "expression": "0 9 * * *"}]
+        }
+      },
+      "typeVersion": 1.2,
+      "notes": "⏰ 매일 오전 9시 트리거\n\n한국 표준시(KST) 기준으로 매일 오전 9시에 실행됩니다."
+    },
+    {
+      "id": "reminder-trigger",
+      "name": "리마인더 체크 (매 10분)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [0, 1200],
+      "parameters": {
+        "rule": {
+          "interval": [{"field": "cronExpression", "expression": "*/10 * * * *"}]
+        }
+      },
+      "typeVersion": 1.2,
+      "notes": "⏱️ 10분마다 리마인더 체크\n\n매 10분마다 실행되어 60분/30분/10분 전 일정을 확인합니다."
+    },
+    {
+      "id": "filter-bot",
+      "name": "봇 메시지 필터",
+      "type": "n8n-nodes-base.if",
+      "position": [240, 400],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {"version": 2, "caseSensitive": true, "typeValidation": "strict"},
+          "combinator": "and",
+          "conditions": [
+            {"id": "1", "operator": {"type": "boolean", "operation": "false", "singleValue": true}, "leftValue": "={{ $json.bot_id ? true : false }}", "rightValue": ""}
+          ]
+        }
+      },
+      "typeVersion": 2.2,
+      "notes": "🤖 봇 메시지 필터링\n\n봇이 보낸 메시지는 무시"
+    },
+    {
+      "id": "get-today-tasks-chat",
+      "name": "오늘 일정 조회 (대화)",
+      "type": "n8n-nodes-base.notion",
+      "position": [480, 300],
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getMany",
+        "databaseId": {"__rl": true, "mode": "id", "value": "242003c7-f7be-804a-9d6e-f76d5d0347b4"},
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "key": "Date|date",
+              "condition": "equals",
+              "dateValue": "={{ $now.toFormat('yyyy-MM-dd') }}"
+            }
+          ]
+        },
+        "options": {"downloadFiles": false}
+      },
+      "typeVersion": 2.2,
+      "notes": "📅 오늘 일정 조회\n\nNotion에서 오늘 날짜의 모든 일정을 가져옵니다."
+    },
+    {
+      "id": "get-incomplete-tasks-chat",
+      "name": "미완료 일정 조회 (대화)",
+      "type": "n8n-nodes-base.notion",
+      "position": [480, 500],
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getMany",
+        "databaseId": {"__rl": true, "mode": "id", "value": "242003c7-f7be-804a-9d6e-f76d5d0347b4"},
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {"key": "Completed|checkbox", "condition": "equals", "checkboxValue": false},
+            {"key": "Date|date", "condition": "past"}
+          ]
+        },
+        "options": {"downloadFiles": false}
+      },
+      "typeVersion": 2.2,
+      "notes": "⏰ 미완료 일정 조회\n\n과거 날짜의 미완료 일정을 조회합니다."
+    },
+    {
+      "id": "get-tomorrow-tasks-chat",
+      "name": "내일 일정 조회 (대화)",
+      "type": "n8n-nodes-base.notion",
+      "position": [480, 700],
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getMany",
+        "databaseId": {"__rl": true, "mode": "id", "value": "242003c7-f7be-804a-9d6e-f76d5d0347b4"},
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "key": "Date|date",
+              "condition": "equals",
+              "dateValue": "={{ $now.plus({days: 1}).toFormat('yyyy-MM-dd') }}"
+            }
+          ]
+        },
+        "options": {"downloadFiles": false}
+      },
+      "typeVersion": 2.2,
+      "notes": "📆 내일 일정 조회"
+    },
+    {
+      "id": "merge-chat-data",
+      "name": "데이터 병합 (대화)",
+      "type": "n8n-nodes-base.merge",
+      "position": [720, 400],
+      "parameters": {
+        "mode": "combine",
+        "options": {}
+      },
+      "typeVersion": 3.2,
+      "notes": "🔄 일정 데이터 병합"
+    },
+    {
+      "id": "ai-chat-agent",
+      "name": "AI 스케줄 어시스턴트",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [960, 400],
+      "parameters": {
+        "text": "=당신은 한국어 스케줄 관리 AI 어시스턴트입니다.\n\n## 사용자 질문\n{{ $('Slack 메시지 수신').item.json.text }}\n\n## 현재 시각\n{{ $now.setZone('Asia/Seoul').toFormat('yyyy-MM-dd HH:mm') }} (KST)\n\n## 오늘 일정\n{{ $('오늘 일정 조회 (대화)').all().length > 0 \n  ? $('오늘 일정 조회 (대화)').all().map(item => {\n      const title = item.json.properties['Entry name']?.title?.[0]?.plain_text || 'N/A';\n      const time = item.json.properties['Time (Entry)']?.rich_text?.[0]?.plain_text || '시간 미정';\n      const completed = item.json.properties['Completed']?.checkbox || false;\n      const category = item.json.properties['Category']?.select?.name || '';\n      return `- ${completed ? '✅' : '⬜'} [${category}] ${title} (${time})`;\n    }).join('\\n')\n  : '오늘 일정이 없습니다.'\n}}\n\n## 미완료 일정 (과거)\n{{ $('미완료 일정 조회 (대화)').all().length > 0\n  ? $('미완료 일정 조회 (대화)').all().map(item => {\n      const title = item.json.properties['Entry name']?.title?.[0]?.plain_text || 'N/A';\n      const date = item.json.properties['Date']?.date?.start || 'N/A';\n      return `- ⚠️ ${title} (${date})`;\n    }).join('\\n')\n  : '미완료 일정이 없습니다.'\n}}\n\n## 내일 일정\n{{ $('내일 일정 조회 (대화)').all().length > 0\n  ? $('내일 일정 조회 (대화)').all().map(item => {\n      const title = item.json.properties['Entry name']?.title?.[0]?.plain_text || 'N/A';\n      const time = item.json.properties['Time (Entry)']?.rich_text?.[0]?.plain_text || '시간 미정';\n      return `- 📌 ${title} (${time})`;\n    }).join('\\n')\n  : '내일 일정이 없습니다.'\n}}\n\n## 지시사항\n1. 위 일정 정보를 바탕으로 사용자 질문에 친절하게 답변하세요.\n2. 일정 추가/수정 요청 시 JSON 형식으로 action을 포함하세요.\n3. 시간 가용성 질문 시 해당 시간대의 일정을 확인하여 답변하세요.\n\n## 응답 형식\n일반 질문: 자연스러운 한국어 답변\n\n일정 추가 요청시 마지막에 JSON 포함:\n```json\n{\"action\":\"create\",\"title\":\"일정명\",\"date\":\"2026-02-04\",\"time\":\"14:00\",\"category\":\"미팅\",\"notes\":\"\",\"location\":\"\"}\n```\n\n카테고리 옵션: API Keys, YouTube, 개발, Threads, 기획, 강의, 디자인, 제안서, 회의, 위탁판매, 기타, Video, 원고",
+        "options": {}
+      },
+      "typeVersion": 3,
+      "notes": "🧠 AI 스케줄 어시스턴트\n\nNotion 일정 데이터를 기반으로 사용자 질문에 답변하고, 일정 추가/수정 요청을 처리합니다."
+    },
+    {
+      "id": "openai-chat-model",
+      "name": "OpenAI GPT-4o",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "position": [960, 600],
+      "parameters": {
+        "options": {"temperature": 0.3},
+        "model": "gpt-4o"
+      },
+      "typeVersion": 1.3,
+      "notes": "🧠 GPT-4o 모델"
+    },
+    {
+      "id": "parse-chat-response",
+      "name": "응답 파싱 및 액션 추출",
+      "type": "n8n-nodes-base.code",
+      "position": [1200, 400],
+      "parameters": {
+        "jsCode": "const output = $input.first().json.output || $input.first().json.text || '';\n\n// JSON 액션 추출 시도\nlet action = null;\nlet response = output;\n\ntry {\n  const jsonMatch = output.match(/```json\\s*([\\s\\S]*?)\\s*```/);\n  if (jsonMatch) {\n    action = JSON.parse(jsonMatch[1]);\n    response = output.replace(/```json[\\s\\S]*?```/g, '').trim();\n  }\n} catch (e) {\n  // JSON 파싱 실패 시 응답만 사용\n}\n\nreturn [{\n  json: {\n    response: response,\n    action: action,\n    hasAction: action !== null && action.action === 'create'\n  }\n}];"
+      },
+      "typeVersion": 2,
+      "notes": "🔄 응답 파싱\n\nAI 응답에서 텍스트와 JSON 액션을 분리합니다."
+    },
+    {
+      "id": "check-action",
+      "name": "액션 확인",
+      "type": "n8n-nodes-base.if",
+      "position": [1440, 400],
+      "parameters": {
+        "options": {},
+        "conditions": {
+          "options": {"version": 2, "caseSensitive": true, "typeValidation": "strict"},
+          "combinator": "and",
+          "conditions": [
+            {"id": "1", "operator": {"type": "boolean", "operation": "true", "singleValue": true}, "leftValue": "={{ $json.hasAction }}", "rightValue": ""}
+          ]
+        }
+      },
+      "typeVersion": 2.2,
+      "notes": "🔀 액션 확인\n\n일정 생성 액션이 있는지 확인"
+    },
+    {
+      "id": "create-schedule",
+      "name": "일정 생성",
+      "type": "n8n-nodes-base.notion",
+      "position": [1680, 300],
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": {"__rl": true, "mode": "id", "value": "242003c7-f7be-804a-9d6e-f76d5d0347b4"},
+        "propertiesUi": {
+          "propertyValues": [
+            {"key": "Entry name|title", "textContent": "={{ $json.action.title }}"},
+            {"key": "Date|date", "date": "={{ $json.action.date }}"},
+            {"key": "Time (Entry)|rich_text", "textContent": "={{ $json.action.time }}"},
+            {"key": "Category|select", "selectValue": "={{ $json.action.category || '기타' }}"},
+            {"key": "Notes|rich_text", "textContent": "={{ $json.action.notes || '' }}"},
+            {"key": "Location (Entry)|rich_text", "textContent": "={{ $json.action.location || '' }}"},
+            {"key": "Relation|relation", "databasePages": [{"id": "276003c7-f7be-8012-889c-ffb91c786af1"}]}
+          ]
+        },
+        "options": {}
+      },
+      "typeVersion": 2.2,
+      "notes": "➕ Notion 일정 생성\n\nRelation은 항상 'Schedule' 선택"
+    },
+    {
+      "id": "send-chat-response",
+      "name": "Slack 답변 전송",
+      "type": "n8n-nodes-base.slack",
+      "position": [1920, 400],
+      "parameters": {
+        "select": "channel",
+        "channelId": {"__rl": true, "mode": "id", "value": "={{ $('Slack 메시지 수신').item.json.channel }}"},
+        "text": "={{ $('응답 파싱 및 액션 추출').item.json.response }}{{ $json.hasAction ? '\\n\\n✅ 일정이 Notion에 추가되었습니다!' : '' }}",
+        "otherOptions": {
+          "thread_ts": "={{ $('Slack 메시지 수신').item.json.ts }}"
+        }
+      },
+      "typeVersion": 2.3,
+      "notes": "💬 Slack 답변 전송\n\n원본 메시지에 스레드로 답변"
+    },
+    {
+      "id": "get-today-tasks-briefing",
+      "name": "오늘 일정 조회 (브리핑)",
+      "type": "n8n-nodes-base.notion",
+      "position": [240, 800],
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getMany",
+        "databaseId": {"__rl": true, "mode": "id", "value": "242003c7-f7be-804a-9d6e-f76d5d0347b4"},
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "key": "Date|date",
+              "condition": "equals",
+              "dateValue": "={{ $now.toFormat('yyyy-MM-dd') }}"
+            }
+          ]
+        },
+        "options": {"downloadFiles": false}
+      },
+      "typeVersion": 2.2,
+      "notes": "📅 오늘 일정 조회 (브리핑용)"
+    },
+    {
+      "id": "get-incomplete-tasks-briefing",
+      "name": "미완료 일정 조회 (브리핑)",
+      "type": "n8n-nodes-base.notion",
+      "position": [240, 1000],
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getMany",
+        "databaseId": {"__rl": true, "mode": "id", "value": "242003c7-f7be-804a-9d6e-f76d5d0347b4"},
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {"key": "Completed|checkbox", "condition": "equals", "checkboxValue": false},
+            {"key": "Date|date", "condition": "past"}
+          ]
+        },
+        "options": {"downloadFiles": false}
+      },
+      "typeVersion": 2.2,
+      "notes": "⏰ 미완료 일정 조회 (브리핑용)"
+    },
+    {
+      "id": "format-briefing",
+      "name": "브리핑 메시지 생성",
+      "type": "n8n-nodes-base.code",
+      "position": [480, 900],
+      "parameters": {
+        "jsCode": "const today = $now.setZone('Asia/Seoul').toFormat('yyyy년 MM월 dd일 EEEE', {locale: 'ko'});\n\nconst todayTasks = $('오늘 일정 조회 (브리핑)').all();\nconst incompleteTasks = $('미완료 일정 조회 (브리핑)').all();\n\nlet message = `:sunny: *${today} 모닝 브리핑*\\n\\n`;\n\n// 미완료 일정\nif (incompleteTasks.length > 0) {\n  message += `:warning: *밀린 일정 (${incompleteTasks.length}건)*\\n`;\n  incompleteTasks.forEach(item => {\n    const title = item.json.properties['Entry name']?.title?.[0]?.plain_text || 'N/A';\n    const date = item.json.properties['Date']?.date?.start || 'N/A';\n    message += `• ${title} (${date})\\n`;\n  });\n  message += '\\n';\n}\n\n// 오늘 할 일\nmessage += `:clipboard: *오늘 할 일 (${todayTasks.length}건)*\\n`;\nif (todayTasks.length > 0) {\n  todayTasks.forEach(item => {\n    const title = item.json.properties['Entry name']?.title?.[0]?.plain_text || 'N/A';\n    const time = item.json.properties['Time (Entry)']?.rich_text?.[0]?.plain_text || '시간 미정';\n    const category = item.json.properties['Category']?.select?.name || '';\n    const completed = item.json.properties['Completed']?.checkbox || false;\n    message += `• ${completed ? '✅' : '⬜'} [${category}] ${title} (${time})\\n`;\n  });\n} else {\n  message += '오늘은 예정된 일정이 없습니다. 🎉\\n';\n}\n\nmessage += '\\n좋은 하루 되세요! 💪';\n\nreturn [{ json: { message } }];"
+      },
+      "typeVersion": 2,
+      "notes": "📝 브리핑 메시지 생성\n\n미완료 일정과 오늘 할 일을 정리한 브리핑 메시지 생성"
+    },
+    {
+      "id": "send-briefing",
+      "name": "브리핑 전송",
+      "type": "n8n-nodes-base.slack",
+      "position": [720, 900],
+      "parameters": {
+        "select": "channel",
+        "channelId": {"__rl": true, "mode": "name", "value": "#schedule"},
+        "text": "={{ $json.message }}",
+        "otherOptions": {}
+      },
+      "typeVersion": 2.3,
+      "notes": "📢 Slack 브리핑 전송\n\n#schedule 채널에 매일 오전 9시 브리핑"
+    },
+    {
+      "id": "get-upcoming-tasks",
+      "name": "다가오는 일정 조회",
+      "type": "n8n-nodes-base.notion",
+      "position": [240, 1200],
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getMany",
+        "databaseId": {"__rl": true, "mode": "id", "value": "242003c7-f7be-804a-9d6e-f76d5d0347b4"},
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {"key": "Completed|checkbox", "condition": "equals", "checkboxValue": false},
+            {
+              "key": "Date|date",
+              "condition": "equals",
+              "dateValue": "={{ $now.toFormat('yyyy-MM-dd') }}"
+            }
+          ]
+        },
+        "options": {"downloadFiles": false}
+      },
+      "typeVersion": 2.2,
+      "notes": "📅 오늘 미완료 일정 조회 (리마인더용)"
+    },
+    {
+      "id": "check-reminder-times",
+      "name": "리마인더 시간 체크",
+      "type": "n8n-nodes-base.code",
+      "position": [480, 1200],
+      "parameters": {
+        "jsCode": "const now = $now.setZone('Asia/Seoul');\nconst tasks = $input.all();\nconst reminders = [];\n\nfor (const task of tasks) {\n  const title = task.json.properties['Entry name']?.title?.[0]?.plain_text || 'N/A';\n  const timeStr = task.json.properties['Time (Entry)']?.rich_text?.[0]?.plain_text || '';\n  const location = task.json.properties['Location (Entry)']?.rich_text?.[0]?.plain_text || '';\n  const pageId = task.json.id;\n  \n  if (!timeStr) continue;\n  \n  // 시간 파싱 (HH:mm 형식 가정)\n  const timeMatch = timeStr.match(/(\\d{1,2}):(\\d{2})/);\n  if (!timeMatch) continue;\n  \n  const taskHour = parseInt(timeMatch[1]);\n  const taskMinute = parseInt(timeMatch[2]);\n  const taskTime = now.set({ hour: taskHour, minute: taskMinute, second: 0 });\n  \n  const diffMinutes = taskTime.diff(now, 'minutes').minutes;\n  \n  // 60분 전, 30분 전, 10분 전 체크 (±5분 오차 허용)\n  let reminderType = null;\n  if (diffMinutes >= 55 && diffMinutes <= 65) {\n    reminderType = '1시간';\n  } else if (diffMinutes >= 25 && diffMinutes <= 35) {\n    reminderType = '30분';\n  } else if (diffMinutes >= 5 && diffMinutes <= 15) {\n    reminderType = '10분';\n  }\n  \n  if (reminderType) {\n    reminders.push({\n      title,\n      time: timeStr,\n      location,\n      reminderType,\n      pageId\n    });\n  }\n}\n\nreturn reminders.length > 0 ? reminders.map(r => ({ json: r })) : [];"
+      },
+      "typeVersion": 2,
+      "notes": "⏱️ 리마인더 시간 체크\n\n1시간/30분/10분 전 일정 확인"
+    },
+    {
+      "id": "send-reminder",
+      "name": "리마인더 전송",
+      "type": "n8n-nodes-base.slack",
+      "position": [720, 1200],
+      "parameters": {
+        "select": "channel",
+        "channelId": {"__rl": true, "mode": "name", "value": "#schedule"},
+        "text": "=:bell: *일정 알림*\\n\\n:clock{{ Math.floor(parseInt($json.time.split(':')[0]) % 12) || 12 }}: *{{ $json.title }}*\\n⏰ {{ $json.reminderType }} 후 시작 ({{ $json.time }}){{ $json.location ? '\\n📍 ' + $json.location : '' }}\\n\\n준비하세요! 🏃",
+        "otherOptions": {}
+      },
+      "typeVersion": 2.3,
+      "notes": "🔔 리마인더 알림 전송"
+    },
+    {
+      "id": "check-past-tasks",
+      "name": "지난 일정 체크 (매 10분)",
+      "type": "n8n-nodes-base.code",
+      "position": [480, 1400],
+      "parameters": {
+        "jsCode": "const now = $now.setZone('Asia/Seoul');\nconst tasks = $('다가오는 일정 조회').all();\nconst pastTasks = [];\n\nfor (const task of tasks) {\n  const title = task.json.properties['Entry name']?.title?.[0]?.plain_text || 'N/A';\n  const timeStr = task.json.properties['Time (Entry)']?.rich_text?.[0]?.plain_text || '';\n  const pageId = task.json.id;\n  const completed = task.json.properties['Completed']?.checkbox || false;\n  \n  if (!timeStr || completed) continue;\n  \n  // 시간 파싱\n  const timeMatch = timeStr.match(/(\\d{1,2}):(\\d{2})/);\n  if (!timeMatch) continue;\n  \n  const taskHour = parseInt(timeMatch[1]);\n  const taskMinute = parseInt(timeMatch[2]);\n  const taskTime = now.set({ hour: taskHour, minute: taskMinute, second: 0 });\n  \n  const diffMinutes = taskTime.diff(now, 'minutes').minutes;\n  \n  // 일정 시간이 지난 경우 (5-15분 지남)\n  if (diffMinutes >= -15 && diffMinutes <= -5) {\n    pastTasks.push({\n      title,\n      time: timeStr,\n      pageId\n    });\n  }\n}\n\nreturn pastTasks.length > 0 ? pastTasks.map(t => ({ json: t })) : [];"
+      },
+      "typeVersion": 2,
+      "notes": "⏰ 지난 일정 체크\n\n시간이 지난 미완료 일정 확인"
+    },
+    {
+      "id": "send-completion-prompt",
+      "name": "완료 확인 메시지",
+      "type": "n8n-nodes-base.slack",
+      "position": [720, 1400],
+      "parameters": {
+        "select": "channel",
+        "channelId": {"__rl": true, "mode": "name", "value": "#schedule"},
+        "text": "=:hourglass_flowing_sand: *일정 완료 확인*\\n\\n*{{ $json.title }}* ({{ $json.time }}) 일정이 끝났나요?\\n\\n완료 여부를 알려주세요!",
+        "otherOptions": {
+          "attachments": [
+            {
+              "fallback": "일정 완료 확인",
+              "callback_id": "schedule_completion_{{ $json.pageId }}",
+              "actions": [
+                {"name": "complete", "text": "✅ 완료", "type": "button", "value": "complete_{{ $json.pageId }}", "style": "primary"},
+                {"name": "postpone", "text": "⏸️ 보류", "type": "button", "value": "postpone_{{ $json.pageId }}"}
+              ]
+            }
+          ]
+        }
+      },
+      "typeVersion": 2.3,
+      "notes": "📋 완료 확인 메시지\n\n완료/보류 버튼이 포함된 인터랙티브 메시지"
+    },
+    {
+      "id": "button-trigger",
+      "name": "버튼 클릭 수신",
+      "type": "n8n-nodes-base.webhook",
+      "position": [0, 1600],
+      "parameters": {
+        "path": "schedule-button-callback",
+        "httpMethod": "POST",
+        "options": {}
+      },
+      "webhookId": "schedule-button-callback",
+      "typeVersion": 2,
+      "notes": "🔘 Slack 버튼 클릭 수신\n\n⚠️ 이 Webhook URL을 Slack App의 Interactive Components에 설정해야 합니다."
+    },
+    {
+      "id": "parse-button-action",
+      "name": "버튼 액션 파싱",
+      "type": "n8n-nodes-base.code",
+      "position": [240, 1600],
+      "parameters": {
+        "jsCode": "const payload = $input.first().json.body?.payload;\nif (!payload) return [];\n\nconst data = JSON.parse(payload);\nconst action = data.actions?.[0];\nif (!action) return [];\n\nconst [actionType, pageId] = action.value.split('_');\n\nreturn [{\n  json: {\n    actionType,\n    pageId,\n    userId: data.user?.id,\n    channelId: data.channel?.id,\n    responseUrl: data.response_url\n  }\n}];"
+      },
+      "typeVersion": 2,
+      "notes": "🔄 버튼 액션 파싱"
+    },
+    {
+      "id": "action-switch",
+      "name": "액션 분기",
+      "type": "n8n-nodes-base.switch",
+      "position": [480, 1600],
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.actionType }}",
+        "rules": {
+          "rules": [
+            {"value2": "complete"},
+            {"value2": "postpone"}
+          ]
+        }
+      },
+      "typeVersion": 3.2,
+      "notes": "🔀 완료/보류 분기"
+    },
+    {
+      "id": "mark-complete",
+      "name": "완료 처리",
+      "type": "n8n-nodes-base.notion",
+      "position": [720, 1500],
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "update",
+        "pageId": "={{ $json.pageId }}",
+        "propertiesUi": {
+          "propertyValues": [
+            {"key": "Completed|checkbox", "checkboxValue": true}
+          ]
+        },
+        "options": {}
+      },
+      "typeVersion": 2.2,
+      "notes": "✅ Notion 완료 체크\n\nCompleted 체크박스를 true로 변경"
+    },
+    {
+      "id": "send-complete-confirm",
+      "name": "완료 확인 응답",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [960, 1500],
+      "parameters": {
+        "url": "={{ $('버튼 액션 파싱').item.json.responseUrl }}",
+        "method": "POST",
+        "options": {},
+        "jsonBody": "{\"text\": \"✅ 일정이 완료 처리되었습니다!\", \"replace_original\": true}",
+        "sendBody": true,
+        "specifyBody": "json"
+      },
+      "typeVersion": 4.2,
+      "notes": "📤 완료 확인 응답"
+    },
+    {
+      "id": "send-postpone-options",
+      "name": "보류 옵션 안내",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [720, 1700],
+      "parameters": {
+        "url": "={{ $('버튼 액션 파싱').item.json.responseUrl }}",
+        "method": "POST",
+        "options": {},
+        "jsonBody": "{\"text\": \"⏸️ 일정 보류\\n\\n일정을 어떻게 처리할까요?\\n- 새 날짜/시간을 입력하면 일정이 변경됩니다\\n- '취소'라고 입력하면 일정이 완전히 보류됩니다\", \"replace_original\": true}",
+        "sendBody": true,
+        "specifyBody": "json"
+      },
+      "typeVersion": 4.2,
+      "notes": "📤 보류 옵션 안내"
+    },
+    {
+      "id": "note-workflow",
+      "name": "워크플로우 가이드",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [-300, -100],
+      "parameters": {
+        "width": 600,
+        "height": 500,
+        "color": 4,
+        "content": "## 📅 Notion 스케줄 비서 - 통합 워크플로우\n\n### 기능 요약\n\n**1️⃣ Slack 대화 처리** (상단)\n- #schedule 채널에서 일정 질문 시 AI 답변\n- 일정 추가 요청 시 자동으로 Notion에 생성\n\n**2️⃣ 매일 오전 9시 브리핑** (중단)\n- 미완료 일정 안내\n- 오늘 할 일 목록\n\n**3️⃣ 일정 리마인더** (하단)\n- 1시간/30분/10분 전 알림\n- 일정 종료 후 완료 확인 버튼\n\n**4️⃣ 완료/보류 처리** (최하단)\n- 완료 버튼: Notion에서 체크박스 체크\n- 보류 버튼: 일정 조정 안내\n\n---\n\n### 필수 설정\n\n1. **Slack App 설정**\n   - Event Subscriptions 활성화\n   - Interactive Components 설정 (Webhook URL)\n   - OAuth Scopes: chat:write, channels:history, users:read\n\n2. **자격증명**\n   - Slack 자격증명\n   - Notion 자격증명\n   - OpenAI API 자격증명\n\n3. **채널**\n   - #schedule 채널 생성 필요"
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "note-db-info",
+      "name": "데이터베이스 정보",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [1100, -100],
+      "parameters": {
+        "width": 400,
+        "height": 250,
+        "color": 7,
+        "content": "### 📊 Notion 데이터베이스 정보\n\n**Beyond_Tasks DB**\n`242003c7-f7be-804a-9d6e-f76d5d0347b4`\n\n**Schedule Relation ID**\n`276003c7-f7be-8012-889c-ffb91c786af1`\n\n**주요 속성**\n- Entry name (title)\n- Date (date)\n- Time (Entry) (rich_text)\n- Category (select)\n- Notes (rich_text)\n- Location (Entry) (rich_text)\n- Completed (checkbox)\n- Relation → Schedule"
+      },
+      "typeVersion": 1
+    }
+  ],
+  "connections": {
+    "Slack 메시지 수신": {"main": [[{"node": "봇 메시지 필터", "type": "main", "index": 0}]]},
+    "봇 메시지 필터": {"main": [[{"node": "오늘 일정 조회 (대화)", "type": "main", "index": 0}, {"node": "미완료 일정 조회 (대화)", "type": "main", "index": 0}, {"node": "내일 일정 조회 (대화)", "type": "main", "index": 0}], []]},
+    "오늘 일정 조회 (대화)": {"main": [[{"node": "데이터 병합 (대화)", "type": "main", "index": 0}]]},
+    "미완료 일정 조회 (대화)": {"main": [[{"node": "데이터 병합 (대화)", "type": "main", "index": 1}]]},
+    "내일 일정 조회 (대화)": {"main": [[{"node": "데이터 병합 (대화)", "type": "main", "index": 0}]]},
+    "데이터 병합 (대화)": {"main": [[{"node": "AI 스케줄 어시스턴트", "type": "main", "index": 0}]]},
+    "AI 스케줄 어시스턴트": {"main": [[{"node": "응답 파싱 및 액션 추출", "type": "main", "index": 0}]]},
+    "OpenAI GPT-4o": {"ai_languageModel": [[{"node": "AI 스케줄 어시스턴트", "type": "ai_languageModel", "index": 0}]]},
+    "응답 파싱 및 액션 추출": {"main": [[{"node": "액션 확인", "type": "main", "index": 0}]]},
+    "액션 확인": {"main": [[{"node": "일정 생성", "type": "main", "index": 0}], [{"node": "Slack 답변 전송", "type": "main", "index": 0}]]},
+    "일정 생성": {"main": [[{"node": "Slack 답변 전송", "type": "main", "index": 0}]]},
+    "매일 오전 9시 브리핑": {"main": [[{"node": "오늘 일정 조회 (브리핑)", "type": "main", "index": 0}, {"node": "미완료 일정 조회 (브리핑)", "type": "main", "index": 0}]]},
+    "오늘 일정 조회 (브리핑)": {"main": [[{"node": "브리핑 메시지 생성", "type": "main", "index": 0}]]},
+    "미완료 일정 조회 (브리핑)": {"main": [[{"node": "브리핑 메시지 생성", "type": "main", "index": 0}]]},
+    "브리핑 메시지 생성": {"main": [[{"node": "브리핑 전송", "type": "main", "index": 0}]]},
+    "리마인더 체크 (매 10분)": {"main": [[{"node": "다가오는 일정 조회", "type": "main", "index": 0}]]},
+    "다가오는 일정 조회": {"main": [[{"node": "리마인더 시간 체크", "type": "main", "index": 0}, {"node": "지난 일정 체크 (매 10분)", "type": "main", "index": 0}]]},
+    "리마인더 시간 체크": {"main": [[{"node": "리마인더 전송", "type": "main", "index": 0}]]},
+    "지난 일정 체크 (매 10분)": {"main": [[{"node": "완료 확인 메시지", "type": "main", "index": 0}]]},
+    "버튼 클릭 수신": {"main": [[{"node": "버튼 액션 파싱", "type": "main", "index": 0}]]},
+    "버튼 액션 파싱": {"main": [[{"node": "액션 분기", "type": "main", "index": 0}]]},
+    "액션 분기": {"main": [[{"node": "완료 처리", "type": "main", "index": 0}], [{"node": "보류 옵션 안내", "type": "main", "index": 0}]]},
+    "완료 처리": {"main": [[{"node": "완료 확인 응답", "type": "main", "index": 0}]]}
+  },
+  "settings": {"executionOrder": "v1", "timezone": "Asia/Seoul"}
+}

@@ -1,0 +1,169 @@
+{
+  "name": "[비서] 위클리 종합 리포트 (매주 월 9시)",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "매주 월요일 9시",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ssh_schedule",
+      "name": "주간 일정 리뷰",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [250, -100],
+      "parameters": {
+        "operation": "executeCommand",
+        "command": "python3 /Users/yoogeon/.claude/skills/beyondworks-assistant/assistant.py schedule \"weekly\" weekly_briefing"
+      },
+      "credentials": {
+        "sshPassword": {
+          "id": "cred_ssh_localhost",
+          "name": "SSH localhost (Mac)"
+        }
+      }
+    },
+    {
+      "id": "ssh_content",
+      "name": "콘텐츠 다이제스트",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [250, 100],
+      "parameters": {
+        "operation": "executeCommand",
+        "command": "python3 /Users/yoogeon/.claude/skills/beyondworks-assistant/assistant.py content \"weekly\" weekly_digest"
+      },
+      "credentials": {
+        "sshPassword": {
+          "id": "cred_ssh_localhost",
+          "name": "SSH localhost (Mac)"
+        }
+      }
+    },
+    {
+      "id": "ssh_finance",
+      "name": "주간 지출 현황",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "parameters": {
+        "operation": "executeCommand",
+        "command": "python3 /Users/yoogeon/.claude/skills/beyondworks-assistant/assistant.py finance \"weekly\" weekly_expense"
+      },
+      "credentials": {
+        "sshPassword": {
+          "id": "cred_ssh_localhost",
+          "name": "SSH localhost (Mac)"
+        }
+      }
+    },
+    {
+      "id": "merge",
+      "name": "리포트 통합",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [550, 100],
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst sections = [];\n\nfor (const item of items) {\n  try {\n    const result = JSON.parse(item.json.stdout || '{}');\n    if (result.response && result.response.trim()) {\n      sections.push(result.response);\n    }\n  } catch (e) {}\n}\n\nif (sections.length === 0) {\n  return [{ json: { response: '', skip: true } }];\n}\n\nconst report = `📊 *Beyondworks 위클리 리포트*\\n${'═'.repeat(20)}\\n\\n${sections.join('\\n\\n' + '─'.repeat(20) + '\\n\\n')}\\n\\n이번 주도 화이팅! 💪`;\n\nreturn [{ json: { response: report, skip: false } }];"
+      }
+    },
+    {
+      "id": "if_skip",
+      "name": "내용 확인",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [750, 100],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition1",
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "slack",
+      "name": "Slack 전송",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [950, 100],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": {
+          "__rl": true,
+          "mode": "name",
+          "value": "general"
+        },
+        "text": "={{ $json.response }}",
+        "otherOptions": {}
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "67xs3j3Zo3E8M20w",
+          "name": "Slack account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "매주 월요일 9시": {
+      "main": [
+        [
+          {"node": "주간 일정 리뷰", "type": "main", "index": 0},
+          {"node": "콘텐츠 다이제스트", "type": "main", "index": 0},
+          {"node": "주간 지출 현황", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "주간 일정 리뷰": {
+      "main": [[{"node": "리포트 통합", "type": "main", "index": 0}]]
+    },
+    "콘텐츠 다이제스트": {
+      "main": [[{"node": "리포트 통합", "type": "main", "index": 0}]]
+    },
+    "주간 지출 현황": {
+      "main": [[{"node": "리포트 통합", "type": "main", "index": 0}]]
+    },
+    "리포트 통합": {
+      "main": [[{"node": "내용 확인", "type": "main", "index": 0}]]
+    },
+    "내용 확인": {
+      "main": [
+        [{"node": "Slack 전송", "type": "main", "index": 0}],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Seoul"
+  }
+}

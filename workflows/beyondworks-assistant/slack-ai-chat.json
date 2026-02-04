@@ -1,0 +1,213 @@
+{
+  "name": "[비서] Slack AI 통합 대화",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Slack 메시지 수신",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300],
+      "webhookId": "schedule-assistant",
+      "parameters": {
+        "path": "schedule-assistant",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "code0",
+      "name": "Challenge 처리",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 300],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\n\n// Slack URL verification challenge\nif (body.type === 'url_verification' && body.challenge) {\n  return [{\n    json: {\n      isChallenge: true,\n      challenge: body.challenge\n    }\n  }];\n}\n\nconst event = body.event || {};\n\n// 봇 메시지 필터링\nif (event.bot_id || !event.text) {\n  return [{\n    json: {\n      isChallenge: false,\n      skip: true\n    }\n  }];\n}\n\n// Slack retry 필터링\nconst headers = $input.first().json.headers || {};\nif (headers['x-slack-retry-num'] || headers['X-Slack-Retry-Num']) {\n  return [{\n    json: {\n      isChallenge: false,\n      skip: true\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    isChallenge: false,\n    skip: false,\n    message: event.text,\n    channel: event.channel,\n    user: event.user,\n    event_id: body.event_id || ''\n  }\n}];"
+      }
+    },
+    {
+      "id": "if1",
+      "name": "Challenge 확인",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [600, 300],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition1",
+              "leftValue": "={{ $json.isChallenge }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "respond1",
+      "name": "Challenge 응답",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [800, 200],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.challenge }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/plain"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "if2",
+      "name": "Skip 확인",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [800, 400],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition2",
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "respond2",
+      "name": "빈 응답",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1000, 500],
+      "parameters": {
+        "respondWith": "noData",
+        "options": {}
+      }
+    },
+    {
+      "id": "ssh1",
+      "name": "AI 비서 실행 (SSH)",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [1000, 300],
+      "parameters": {
+        "operation": "executeCommand",
+        "command": "=python3 /Users/yoogeon/.claude/skills/beyondworks-assistant/assistant.py router \"{{ $json.message.replace(/\"/g, '\\\\\"') }}\""
+      },
+      "credentials": {
+        "sshPassword": {
+          "id": "cred_ssh_localhost",
+          "name": "SSH localhost (Mac)"
+        }
+      }
+    },
+    {
+      "id": "code2",
+      "name": "응답 파싱",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 300],
+      "parameters": {
+        "jsCode": "const stdout = $input.first().json.stdout || '{}';\nconst prevData = $('Challenge 처리').first().json;\n\nlet response = '응답을 생성할 수 없습니다.';\nlet domain = 'unknown';\ntry {\n  const result = JSON.parse(stdout);\n  response = result.response || response;\n  domain = result.domain || domain;\n} catch (e) {\n  response = '오류가 발생했습니다: ' + e.message;\n}\n\n// 도메인 이모지 프리픽스\nconst domainEmoji = {\n  schedule: '📅', content: '📚', finance: '💰',\n  travel: '✈️', tools: '🔧', business: '💼'\n};\nconst prefix = domainEmoji[domain] || '🤖';\n\nreturn [{\n  json: {\n    response: `${prefix} ${response}`,\n    channel: prevData.channel,\n    domain: domain\n  }\n}];"
+      }
+    },
+    {
+      "id": "slack1",
+      "name": "Slack 응답 전송",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1400, 300],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.channel }}"
+        },
+        "text": "={{ $json.response }}",
+        "otherOptions": {}
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "67xs3j3Zo3E8M20w",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "id": "respond3",
+      "name": "처리 완료 응답",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1600, 300],
+      "parameters": {
+        "respondWith": "noData",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Slack 메시지 수신": {
+      "main": [[{"node": "Challenge 처리", "type": "main", "index": 0}]]
+    },
+    "Challenge 처리": {
+      "main": [[{"node": "Challenge 확인", "type": "main", "index": 0}]]
+    },
+    "Challenge 확인": {
+      "main": [
+        [{"node": "Challenge 응답", "type": "main", "index": 0}],
+        [{"node": "Skip 확인", "type": "main", "index": 0}]
+      ]
+    },
+    "Skip 확인": {
+      "main": [
+        [{"node": "AI 비서 실행 (SSH)", "type": "main", "index": 0}],
+        [{"node": "빈 응답", "type": "main", "index": 0}]
+      ]
+    },
+    "AI 비서 실행 (SSH)": {
+      "main": [[{"node": "응답 파싱", "type": "main", "index": 0}]]
+    },
+    "응답 파싱": {
+      "main": [[{"node": "Slack 응답 전송", "type": "main", "index": 0}]]
+    },
+    "Slack 응답 전송": {
+      "main": [[{"node": "처리 완료 응답", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

@@ -1,0 +1,97 @@
+{
+  "name": "GitHub PR → Slack 알림",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "github-pr-webhook",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "GitHub Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300],
+      "webhookId": "github-pr-webhook"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false },
+          "conditions": [
+            {
+              "id": "is-pr-event",
+              "leftValue": "={{ $json.body.action }}",
+              "rightValue": "opened,synchronize,review_requested,closed",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "id": "has-pr",
+              "leftValue": "={{ $json.body.pull_request }}",
+              "rightValue": "",
+              "operator": {
+                "type": "object",
+                "operation": "exists"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-pr-event",
+      "name": "PR 이벤트?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst pr = body.pull_request;\nconst action = body.action;\n\n// 액션별 아이콘과 텍스트\nconst actionMap = {\n  opened: { icon: '🆕', text: '새 PR 생성' },\n  synchronize: { icon: '🔄', text: 'PR 업데이트' },\n  review_requested: { icon: '👀', text: 'PR 리뷰 요청' },\n  closed: pr.merged ? { icon: '✅', text: 'PR 머지 완료' } : { icon: '❌', text: 'PR 닫힘' }\n};\n\nconst actionInfo = actionMap[action] || { icon: '🔀', text: `PR ${action}` };\n\n// 리뷰어 목록\nconst reviewers = (body.requested_reviewers || pr.requested_reviewers || [])\n  .map(r => `@${r.login}`)\n  .join(', ') || '없음';\n\n// 변경 파일 수\nconst changes = pr.changed_files ? `${pr.changed_files}개 파일 (+${pr.additions}/-${pr.deletions})` : '';\n\nconst blocks = [\n  {\n    type: 'header',\n    text: { type: 'plain_text', text: `${actionInfo.icon} ${actionInfo.text}` }\n  },\n  {\n    type: 'section',\n    text: {\n      type: 'mrkdwn',\n      text: `*<${pr.html_url}|#${pr.number} ${pr.title}>*`\n    }\n  },\n  {\n    type: 'section',\n    fields: [\n      { type: 'mrkdwn', text: `*작성자:*\\n<${pr.user.html_url}|@${pr.user.login}>` },\n      { type: 'mrkdwn', text: `*리뷰어:*\\n${reviewers}` },\n      { type: 'mrkdwn', text: `*브랜치:*\\n\\`${pr.head.ref}\\` → \\`${pr.base.ref}\\`` },\n      { type: 'mrkdwn', text: `*변경:*\\n${changes}` }\n    ]\n  }\n];\n\n// PR 설명이 있으면 추가 (최대 200자)\nif (pr.body && pr.body.trim()) {\n  const desc = pr.body.length > 200 ? pr.body.substring(0, 200) + '...' : pr.body;\n  blocks.push({\n    type: 'section',\n    text: { type: 'mrkdwn', text: `*설명:*\\n${desc}` }\n  });\n}\n\nblocks.push(\n  { type: 'divider' },\n  {\n    type: 'actions',\n    elements: [\n      {\n        type: 'button',\n        text: { type: 'plain_text', text: '🔗 PR 보기' },\n        url: pr.html_url,\n        style: 'primary'\n      },\n      {\n        type: 'button',\n        text: { type: 'plain_text', text: '📁 Files Changed' },\n        url: `${pr.html_url}/files`\n      }\n    ]\n  },\n  {\n    type: 'context',\n    elements: [{\n      type: 'mrkdwn',\n      text: `📦 ${pr.base.repo.full_name} | n8n 자동화`\n    }]\n  }\n);\n\nreturn [{\n  json: {\n    blocks: JSON.stringify(blocks),\n    text: `${actionInfo.icon} ${actionInfo.text}: #${pr.number} ${pr.title} by @${pr.user.login}`\n  }\n}];"
+      },
+      "id": "format-pr",
+      "name": "PR 정보 포맷",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 200]
+    },
+    {
+      "parameters": {
+        "operation": "post",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "auto-devops",
+          "mode": "name"
+        },
+        "text": "={{ $json.text }}",
+        "otherOptions": {
+          "includeLinkToWorkflow": false,
+          "blocksUi": "={{ $json.blocks }}"
+        }
+      },
+      "id": "slack-send",
+      "name": "Slack DevOps 알림",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [950, 200]
+    }
+  ],
+  "connections": {
+    "GitHub Webhook": {
+      "main": [[{ "node": "PR 이벤트?", "type": "main", "index": 0 }]]
+    },
+    "PR 이벤트?": {
+      "main": [
+        [{ "node": "PR 정보 포맷", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "PR 정보 포맷": {
+      "main": [[{ "node": "Slack DevOps 알림", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1", "timezone": "Asia/Seoul" }
+}

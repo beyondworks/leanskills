@@ -1,0 +1,134 @@
+{
+  "name": "[비서] 리마인더 통합 (10분마다)",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "10분마다 체크",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 10
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ssh_schedule",
+      "name": "일정 리마인더",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [250, -100],
+      "parameters": {
+        "operation": "executeCommand",
+        "command": "python3 /Users/yoogeon/.claude/skills/beyondworks-assistant/assistant.py schedule \"check\" reminder"
+      },
+      "credentials": {
+        "sshPassword": {
+          "id": "cred_ssh_localhost",
+          "name": "SSH localhost (Mac)"
+        }
+      }
+    },
+    {
+      "id": "ssh_travel",
+      "name": "여행 D-day",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [250, 100],
+      "parameters": {
+        "operation": "executeCommand",
+        "command": "python3 /Users/yoogeon/.claude/skills/beyondworks-assistant/assistant.py travel \"dday\" dday_reminder"
+      },
+      "credentials": {
+        "sshPassword": {
+          "id": "cred_ssh_localhost",
+          "name": "SSH localhost (Mac)"
+        }
+      }
+    },
+    {
+      "id": "ssh_tools",
+      "name": "결제일 리마인더",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "parameters": {
+        "operation": "executeCommand",
+        "command": "python3 /Users/yoogeon/.claude/skills/beyondworks-assistant/assistant.py tools \"payment\" payment_reminder"
+      },
+      "credentials": {
+        "sshPassword": {
+          "id": "cred_ssh_localhost",
+          "name": "SSH localhost (Mac)"
+        }
+      }
+    },
+    {
+      "id": "merge",
+      "name": "리마인더 통합",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [550, 100],
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst reminders = [];\n\nfor (const item of items) {\n  try {\n    const result = JSON.parse(item.json.stdout || '{}');\n    // has_reminder 플래그 확인 또는 response가 비어있지 않은지 확인\n    if (result.response && result.response.trim()) {\n      reminders.push(result.response);\n    }\n  } catch (e) {}\n}\n\n// 리마인더가 없으면 빈 배열 반환 (워크플로우 중단)\nif (reminders.length === 0) {\n  return [];\n}\n\nconst message = reminders.join('\\n\\n');\nreturn [{ json: { response: message } }];"
+      }
+    },
+    {
+      "id": "slack",
+      "name": "Slack 전송",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [750, 100],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": {
+          "__rl": true,
+          "mode": "name",
+          "value": "general"
+        },
+        "text": "={{ $json.response }}",
+        "otherOptions": {}
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "67xs3j3Zo3E8M20w",
+          "name": "Slack account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "10분마다 체크": {
+      "main": [
+        [
+          {"node": "일정 리마인더", "type": "main", "index": 0},
+          {"node": "여행 D-day", "type": "main", "index": 0},
+          {"node": "결제일 리마인더", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "일정 리마인더": {
+      "main": [[{"node": "리마인더 통합", "type": "main", "index": 0}]]
+    },
+    "여행 D-day": {
+      "main": [[{"node": "리마인더 통합", "type": "main", "index": 0}]]
+    },
+    "결제일 리마인더": {
+      "main": [[{"node": "리마인더 통합", "type": "main", "index": 0}]]
+    },
+    "리마인더 통합": {
+      "main": [[{"node": "Slack 전송", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Seoul"
+  }
+}

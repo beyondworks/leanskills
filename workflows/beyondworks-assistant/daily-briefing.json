@@ -1,0 +1,190 @@
+{
+  "name": "[비서] 데일리 종합 브리핑 (매일 9시)",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "매일 9시 트리거",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ssh_schedule",
+      "name": "일정 브리핑",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [250, -100],
+      "parameters": {
+        "operation": "executeCommand",
+        "command": "python3 /Users/yoogeon/.claude/skills/beyondworks-assistant/assistant.py schedule \"daily\" daily_briefing"
+      },
+      "credentials": {
+        "sshPassword": {
+          "id": "cred_ssh_localhost",
+          "name": "SSH localhost (Mac)"
+        }
+      }
+    },
+    {
+      "id": "ssh_finance",
+      "name": "재무 주간 지출",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [250, 100],
+      "parameters": {
+        "operation": "executeCommand",
+        "command": "python3 /Users/yoogeon/.claude/skills/beyondworks-assistant/assistant.py finance \"weekly\" weekly_expense"
+      },
+      "credentials": {
+        "sshPassword": {
+          "id": "cred_ssh_localhost",
+          "name": "SSH localhost (Mac)"
+        }
+      }
+    },
+    {
+      "id": "ssh_travel",
+      "name": "여행 D-day",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "parameters": {
+        "operation": "executeCommand",
+        "command": "python3 /Users/yoogeon/.claude/skills/beyondworks-assistant/assistant.py travel \"dday\" dday_reminder"
+      },
+      "credentials": {
+        "sshPassword": {
+          "id": "cred_ssh_localhost",
+          "name": "SSH localhost (Mac)"
+        }
+      }
+    },
+    {
+      "id": "ssh_tools",
+      "name": "결제일 알림",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [250, 500],
+      "parameters": {
+        "operation": "executeCommand",
+        "command": "python3 /Users/yoogeon/.claude/skills/beyondworks-assistant/assistant.py tools \"payment\" payment_reminder"
+      },
+      "credentials": {
+        "sshPassword": {
+          "id": "cred_ssh_localhost",
+          "name": "SSH localhost (Mac)"
+        }
+      }
+    },
+    {
+      "id": "merge",
+      "name": "브리핑 통합",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [550, 200],
+      "parameters": {
+        "jsCode": "// 모든 입력 수집\nconst items = $input.all();\nconst sections = [];\n\nfor (const item of items) {\n  try {\n    const result = JSON.parse(item.json.stdout || '{}');\n    if (result.response && result.response.trim()) {\n      sections.push(result.response);\n    }\n  } catch (e) {\n    // skip parse errors\n  }\n}\n\nif (sections.length === 0) {\n  return [{ json: { response: '', skip: true } }];\n}\n\nconst briefing = `🌅 *Beyondworks 데일리 브리핑*\\n${'─'.repeat(20)}\\n\\n${sections.join('\\n\\n')}\\n\\n좋은 하루 보내세요! 🙌`;\n\nreturn [{ json: { response: briefing, skip: false } }];"
+      }
+    },
+    {
+      "id": "if_skip",
+      "name": "내용 확인",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [750, 200],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition1",
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "slack",
+      "name": "Slack 전송",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [950, 200],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": {
+          "__rl": true,
+          "mode": "name",
+          "value": "general"
+        },
+        "text": "={{ $json.response }}",
+        "otherOptions": {}
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "67xs3j3Zo3E8M20w",
+          "name": "Slack account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "매일 9시 트리거": {
+      "main": [
+        [
+          {"node": "일정 브리핑", "type": "main", "index": 0},
+          {"node": "재무 주간 지출", "type": "main", "index": 0},
+          {"node": "여행 D-day", "type": "main", "index": 0},
+          {"node": "결제일 알림", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "일정 브리핑": {
+      "main": [[{"node": "브리핑 통합", "type": "main", "index": 0}]]
+    },
+    "재무 주간 지출": {
+      "main": [[{"node": "브리핑 통합", "type": "main", "index": 0}]]
+    },
+    "여행 D-day": {
+      "main": [[{"node": "브리핑 통합", "type": "main", "index": 0}]]
+    },
+    "결제일 알림": {
+      "main": [[{"node": "브리핑 통합", "type": "main", "index": 0}]]
+    },
+    "브리핑 통합": {
+      "main": [[{"node": "내용 확인", "type": "main", "index": 0}]]
+    },
+    "내용 확인": {
+      "main": [
+        [{"node": "Slack 전송", "type": "main", "index": 0}],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Seoul"
+  }
+}
