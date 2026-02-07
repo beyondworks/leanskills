@@ -78,6 +78,46 @@ def get_domain_keywords_map():
     }
 
 
+def resolve_db_alias(alias):
+    """Resolve a user-facing alias to (domain, db_key, db_id).
+
+    Searches all domains' "aliases" mappings in config.json.
+    Returns (domain_name, db_key, database_id) or (None, None, None).
+    """
+    config = load_config()
+    domains = config.get('domains', {})
+    alias_lower = alias.strip().lower().replace(" ", "")
+    for domain_name, domain_cfg in domains.items():
+        aliases = domain_cfg.get('aliases', {})
+        for alias_name, db_key in aliases.items():
+            if alias_lower == alias_name.lower().replace(" ", ""):
+                db_id = domain_cfg.get('databases', {}).get(db_key, "")
+                return (domain_name, db_key, db_id)
+    return (None, None, None)
+
+
+def get_all_aliases_map():
+    """Build a flat map: alias_name -> {domain, db_key, db_id}.
+
+    Used by workspace.py to build the DB catalog for the system prompt.
+    """
+    config = load_config()
+    domains = config.get('domains', {})
+    result = {}
+    for domain_name, domain_cfg in domains.items():
+        aliases = domain_cfg.get('aliases', {})
+        dbs = domain_cfg.get('databases', {})
+        for alias_name, db_key in aliases.items():
+            db_id = dbs.get(db_key, "")
+            if db_id:
+                result[alias_name] = {
+                    "domain": domain_name,
+                    "db_key": db_key,
+                    "db_id": db_id,
+                }
+    return result
+
+
 def get_notion_key():
     """Return the Notion API key from environment."""
     return os.environ.get('NOTION_API_KEY', '')

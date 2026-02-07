@@ -6,7 +6,7 @@ Acts as the universal AI agent for all Notion-backed queries.
 
 import json
 from datetime import datetime, timedelta
-from core.config import get_domain_config
+from core.config import get_domain_config, get_all_aliases_map
 from core.openai_client import (
     chat_completion,
     chat_with_tools_multi,
@@ -33,48 +33,29 @@ PLAIN_TEXT_RULE = "\n\n## 응답 규칙\n- 반드시 플레인 텍스트로 응�
 
 
 def _build_db_catalog():
-    """Build a DB catalog string from config.json for the system prompt."""
-    lines = []
-    all_configs = {}
+    """Build a DB catalog for the system prompt.
+
+    Produces a lookup table: user-facing name -> database_id
+    so the AI can directly resolve names like "디자인 페이지" to a DB ID.
+    """
+    all_aliases = get_all_aliases_map()
+
+    # 1) Alias → DB ID direct mapping (primary lookup)
+    lines = ["### 명칭 → database_id 매핑 (사용자가 이 이름을 쓰면 해당 DB 사용)"]
+    seen_ids = set()
+    for alias_name, info in all_aliases.items():
+        lines.append(f"- \"{alias_name}\" → {info['db_id']}")
+        seen_ids.add(info['db_id'])
+
+    # 2) Add remaining DBs without aliases
+    lines.append("\n### 기타 데이터베이스")
     for domain_name in ["schedule", "content", "finance", "travel", "tools", "business"]:
         cfg = get_domain_config(domain_name)
-        if cfg:
-            all_configs[domain_name] = cfg
-
-    catalog = {
-        "schedule": {
-            "tasks": "일정/할일 (Entry name, Date, Completed, Notes, Location)",
-        },
-        "finance": {
-            "manager": "수입/지출 내역",
-            "accounts": "계좌 목록",
-        },
-        "tools": {
-            "subscribe": "구독 서비스 (Entry name, Monthly Fee, Status, Plan, Payment Date)",
-            "work_tool": "업무 도구",
-            "api_archive": "API 키/계정 정보 (Entry name, API Key)",
-        },
-        "content": {
-            "AI": "AI 콘텐츠", "Design": "디자인 콘텐츠",
-            "insights": "인사이트", "news": "뉴스",
-        },
-        "travel": {
-            "trips": "여행 계획",
-            "itinerary": "여행 일정",
-        },
-        "business": {
-            "main": "비즈니스 메인",
-            "memo_archive": "메모 아카이브",
-        },
-    }
-
-    for domain_name, db_desc_map in catalog.items():
-        cfg = all_configs.get(domain_name, {})
         dbs = cfg.get("databases", {})
-        for db_key, description in db_desc_map.items():
-            db_id = dbs.get(db_key, "")
-            if db_id:
-                lines.append(f"- {description}: {db_id}")
+        for db_key, db_id in dbs.items():
+            if db_id and db_id not in seen_ids:
+                lines.append(f"- [{domain_name}] {db_key}: {db_id}")
+                seen_ids.add(db_id)
 
     return "\n".join(lines)
 
@@ -93,7 +74,10 @@ SYSTEM_PROMPT = """당신은 Notion을 속속들이 알고 있는 만능 AI 비�
 - 일정에 시간 포함 시: "YYYY-MM-DDT10:00:00+09:00" 형식 사용
 - 예: "오전 10시" → "2026-02-08T10:00:00+09:00", "오후 3시" → "2026-02-08T15:00:00+09:00"
 
-## 알고 있는 주요 데이터베이스
+## 데이터베이스 명칭 매핑
+사용자가 아래 명칭을 사용하면, 반드시 매핑된 database_id를 사용하세요.
+예: "디자인 페이지에 기록해줘" → "디자인페이지" 매핑의 DB ID로 create_record 호출
+
 {db_catalog}
 
 ## 재무(지출/수입) 기록 방법
