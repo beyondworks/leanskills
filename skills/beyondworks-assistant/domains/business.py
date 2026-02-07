@@ -3,16 +3,26 @@ import json
 from datetime import datetime
 from core.config import get_domain_config, load_config
 from core.notion_client import query_database, create_page, parse_page_properties
-from core.openai_client import chat_with_tools, chat_completion
-from core.history import add_to_history, get_recent_history
+from core.openai_client import (
+    chat_completion,
+    chat_with_tools_multi,
+    REQUEST_USER_CHOICE_TOOL,
+    LEARN_RULE_TOOL,
+)
+from core.memory import get_rules_as_prompt
 
 DOMAIN = "business"
+
+PLAIN_TEXT_RULE = "\n\n## 응답 규칙\n- 반드시 플레인 텍스트로 응답. **bold**, [link](url), # heading, `code` 등 마크다운 절대 금지.\n- 이모지 사용 가능."
+
 
 def _cfg():
     return get_domain_config(DOMAIN)
 
+
 def _db(key):
     return _cfg().get("databases", {}).get(key, "")
+
 
 SYSTEM_PROMPT = """당신은 비즈니스 관리 비서입니다. 메모, 역량 평가, 템플릿, 크로스 도메인 검색을 관리합니다.
 
@@ -23,7 +33,7 @@ SYSTEM_PROMPT = """당신은 비즈니스 관리 비서입니다. 메모, 역량
 - 템플릿 조회
 
 ## 응답 스타일
-- 한국어, 간결하게, 핵심 위주"""
+- 한국어, 간결하게, 핵심 위주""" + PLAIN_TEXT_RULE
 
 TOOLS = [
     {"type": "function", "function": {
@@ -64,6 +74,7 @@ TOOLS = [
     }}
 ]
 
+
 def _query_memos(keyword=None, limit=10):
     db_id = _db("memo_archive")
     if not db_id:
@@ -78,6 +89,7 @@ def _query_memos(keyword=None, limit=10):
         return [parse_page_properties(p) for p in r.get("results", [])]
     return []
 
+
 def _query_competency():
     db_id = _db("competency")
     if not db_id:
@@ -86,6 +98,7 @@ def _query_competency():
     if isinstance(r, dict) and r.get("success"):
         return [parse_page_properties(p) for p in r.get("results", [])]
     return []
+
 
 def _query_templates(keyword=None):
     db_id = _db("templates")
@@ -98,6 +111,7 @@ def _query_templates(keyword=None):
     if isinstance(r, dict) and r.get("success"):
         return [parse_page_properties(p) for p in r.get("results", [])]
     return []
+
 
 def _search_across_domains(keyword, limit_per_db=3):
     """Search across all domains for a keyword."""
@@ -118,12 +132,13 @@ def _search_across_domains(keyword, limit_per_db=3):
                     all_results.append(parsed)
     return all_results
 
+
 def _exec_tool(name, args):
     if name == "search_workspace":
         keyword = args.get("keyword", "")
         results = _search_across_domains(keyword)
         if results:
-            lines = [f"🔍 '{keyword}' 전체 검색 ({len(results)}건):"]
+            lines = [f"'{keyword}' 전체 검색 ({len(results)}건):"]
             grouped = {}
             for r in results:
                 domain = r.get("_domain", "unknown")
@@ -131,16 +146,15 @@ def _exec_tool(name, args):
                     grouped[domain] = []
                 grouped[domain].append(r)
             domain_labels = {
-                "schedule": "📅 일정", "content": "📚 콘텐츠",
-                "finance": "💰 재무", "travel": "✈️ 여행",
-                "tools": "🔧 도구", "business": "💼 비즈니스"
+                "schedule": "일정", "content": "콘텐츠",
+                "finance": "재무", "travel": "여행",
+                "tools": "도구", "business": "비즈니스"
             }
             for domain, items in grouped.items():
                 label = domain_labels.get(domain, domain)
-                lines.append(f"\n{label}:")
+                lines.append(f"\n[{label}]")
                 for item in items[:5]:
                     title = item.get("Name", item.get("Entry name", item.get("Entry", "")))
-                    url = item.get("url", "")
                     db_name = item.get("_db", "")
                     line = f"  - {title}"
                     if db_name:
@@ -154,7 +168,7 @@ def _exec_tool(name, args):
         count = args.get("count", 10)
         memos = _query_memos(keyword, count)
         if memos:
-            lines = [f"📝 메모 ({len(memos)}건):"]
+            lines = [f"메모 ({len(memos)}건):"]
             for m in memos:
                 title = m.get("Name", "")
                 created = m.get("Created", m.get("created_time", ""))
@@ -179,12 +193,12 @@ def _exec_tool(name, args):
         if args.get("tags"):
             props["Tags"] = {"multi_select": [{"name": t} for t in args["tags"][:5]]}
         r = create_page(_db("memo_archive"), props)
-        return f"✅ 메모 저장 완료! '{args['title']}'" if r.get("success") else f"❌ 실패: {r.get('error', '')}"
+        return f"메모 저장 완료! '{args['title']}'" if r.get("success") else f"실패: {r.get('error', '')}"
 
     if name == "get_competency":
         items = _query_competency()
         if items:
-            lines = ["📊 핵심 역량 평가:"]
+            lines = ["핵심 역량 평가:"]
             for c in items:
                 comp_name = c.get("Name", c.get("이름", ""))
                 score = c.get("Score", c.get("점수", c.get("Level", "")))
@@ -202,11 +216,10 @@ def _exec_tool(name, args):
         keyword = args.get("keyword")
         templates = _query_templates(keyword)
         if templates:
-            lines = [f"📋 템플릿 ({len(templates)}건):"]
+            lines = [f"템플릿 ({len(templates)}건):"]
             for t in templates:
                 tpl_name = t.get("Name", "")
                 category = t.get("Category", t.get("카테고리", ""))
-                url = t.get("url", "")
                 line = f"- {tpl_name}"
                 if category:
                     line += f" [{category}]"
@@ -217,23 +230,34 @@ def _exec_tool(name, args):
     return "알 수 없는 도구"
 
 
-def handle(message, mode="chat"):
+def handle(message, mode="chat", session=None, image_urls=None):
     if not message:
         return {"error": "메시지가 필요합니다", "domain": DOMAIN}
 
+    # Build context
     recent_memos = _query_memos(limit=5)
 
-    user_content = f"""## 최근 메모
-{json.dumps(recent_memos[:5], ensure_ascii=False, indent=1)}
+    context = f"""## 최근 메모
+{json.dumps(recent_memos[:5], ensure_ascii=False, indent=1)}"""
 
-## 사용자 요청
-{message}"""
+    # Build messages from session history
+    messages = []
+    if session and session.get("messages"):
+        messages = list(session["messages"][-16:])
+    messages.append({"role": "user", "content": f"{context}\n\n## 사용자 요청\n{message}"})
 
-    text, calls = chat_with_tools(SYSTEM_PROMPT, user_content, TOOLS)
-    if calls:
-        resp = _exec_tool(calls[0]["name"], calls[0]["arguments"])
-    else:
-        resp = text
+    learned_rules = get_rules_as_prompt(DOMAIN)
+    result = chat_with_tools_multi(
+        SYSTEM_PROMPT + learned_rules, messages,
+        TOOLS + [REQUEST_USER_CHOICE_TOOL, LEARN_RULE_TOOL], _exec_tool,
+        domain=DOMAIN, image_urls=image_urls
+    )
 
-    add_to_history(DOMAIN, message, resp)
-    return {"response": resp, "domain": DOMAIN}
+    output = {
+        "response": result["response"],
+        "domain": DOMAIN,
+        "learning_events": result.get("learning_events", []),
+    }
+    if result.get("interactive"):
+        output["interactive"] = result["interactive"]
+    return output

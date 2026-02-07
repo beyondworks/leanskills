@@ -85,38 +85,8 @@ def parse_rich_text(rich_text_arr):
 
 
 # ---------------------------------------------------------------------------
-# Generic property parser
+# Property value extractor
 # ---------------------------------------------------------------------------
-
-def parse_page_properties(page):
-    """Parse all properties of a Notion page into a flat dictionary.
-
-    Handles the following Notion property types:
-        title, rich_text, number, select, multi_select, date, checkbox,
-        url, email, phone_number, relation, formula, rollup, status,
-        people, files, created_time, last_edited_time, created_by,
-        last_edited_by, unique_id.
-
-    Args:
-        page: A Notion page object (dict) as returned by the API.
-
-    Returns:
-        dict mapping property names to their extracted Python values.
-        Also includes 'id' and 'url' from the page-level metadata.
-    """
-    result = {
-        'id': page.get('id', ''),
-        'url': page.get('url', ''),
-    }
-
-    props = page.get('properties', {})
-
-    for prop_name, prop_value in props.items():
-        prop_type = prop_value.get('type', '')
-        result[prop_name] = _extract_property_value(prop_type, prop_value)
-
-    return result
-
 
 def _extract_property_value(prop_type, prop_value):
     """Extract a Python value from a single Notion property object.
@@ -179,7 +149,15 @@ def _extract_property_value(prop_type, prop_value):
         rollup_obj = prop_value.get('rollup', {})
         rollup_type = rollup_obj.get('type', '')
         if rollup_type == 'array':
-            return rollup_obj.get('array', [])
+            arr = rollup_obj.get('array', [])
+            parsed = []
+            for item in arr:
+                item_type = item.get('type', '')
+                if item_type:
+                    parsed.append(_extract_property_value(item_type, item))
+                else:
+                    parsed.append(item)
+            return parsed
         return rollup_obj.get(rollup_type)
 
     if prop_type == 'status':
@@ -228,10 +206,274 @@ def _extract_property_value(prop_type, prop_value):
 
 
 # ---------------------------------------------------------------------------
+# Relation resolution
+# ---------------------------------------------------------------------------
+
+_page_title_cache = {}
+
+
+def resolve_page_title(page_id):
+    """Fetch a page by ID and extract its title property.
+
+    Uses an in-memory cache to avoid duplicate API calls within the
+    same CLI invocation.
+
+    Args:
+        page_id: Notion page ID string.
+
+    Returns:
+        Title text, or the page_id itself as fallback.
+    """
+    if page_id in _page_title_cache:
+        return _page_title_cache[page_id]
+
+    result = notion_request("GET", f"pages/{page_id}")
+    if not result["success"]:
+        _page_title_cache[page_id] = page_id
+        return page_id
+
+    page = result["data"]
+    props = page.get("properties", {})
+    for prop_name, prop_value in props.items():
+        if prop_value.get("type") == "title":
+            title = parse_rich_text(prop_value.get("title", []))
+            _page_title_cache[page_id] = title or page_id
+            return _page_title_cache[page_id]
+
+    _page_title_cache[page_id] = page_id
+    return page_id
+
+
+def resolve_relations(relation_ids):
+    """Resolve a list of relation page IDs to {id, title} dicts.
+
+    Args:
+        relation_ids: List of Notion page ID strings.
+
+    Returns:
+        List of dicts with 'id' and 'title' keys.
+    """
+    return [
+        {"id": pid, "title": resolve_page_title(pid)}
+        for pid in relation_ids
+        if pid
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Generic property parser (placed after resolve_relations to satisfy linter)
+# ---------------------------------------------------------------------------
+
+def parse_page_properties(page, resolve_rels=False):
+    """Parse all properties of a Notion page into a flat dictionary.
+
+    Handles the following Notion property types:
+        title, rich_text, number, select, multi_select, date, checkbox,
+        url, email, phone_number, relation, formula, rollup, status,
+        people, files, created_time, last_edited_time, created_by,
+        last_edited_by, unique_id.
+
+    Args:
+        page: A Notion page object (dict) as returned by the API.
+        resolve_rels: If True, resolve relation page IDs to
+            {id, title} dicts via the Notion API.
+
+    Returns:
+        dict mapping property names to their extracted Python values.
+        Also includes 'id' and 'url' from the page-level metadata.
+    """
+    result = {
+        'id': page.get('id', ''),
+        'url': page.get('url', ''),
+    }
+
+    props = page.get('properties', {})
+
+    for prop_name, prop_value in props.items():
+        prop_type = prop_value.get('type', '')
+        value = _extract_property_value(prop_type, prop_value)
+
+        if resolve_rels and prop_type == 'relation' and isinstance(value, list):
+            value = resolve_relations(value)
+
+        result[prop_name] = value
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Workspace helpers
+# ---------------------------------------------------------------------------
+
+def search_workspace(query, object_type="page_or_database", page_size=20, start_cursor=None):
+    """Search across the connected Notion workspace.
+
+    Args:
+        query: Search text.
+        object_type: page|database|page_or_database
+        page_size: max items in a single page (max 100).
+        start_cursor: optional cursor for pagination.
+
+    Returns:
+        dict with success/results/next_cursor/has_more fields.
+    """
+    body = {
+        "query": query or "",
+        "page_size": min(max(page_size, 1), 100),
+    }
+    if object_type in {"page", "database"}:
+        body["filter"] = {"property": "object", "value": object_type}
+    if start_cursor:
+        body["start_cursor"] = start_cursor
+
+    response = notion_request("POST", "search", body)
+    if not response["success"]:
+        return {
+            "success": False,
+            "results": [],
+            "error": response.get("error", "Unknown error"),
+        }
+
+    data = response["data"]
+    return {
+        "success": True,
+        "results": data.get("results", []),
+        "next_cursor": data.get("next_cursor"),
+        "has_more": data.get("has_more", False),
+    }
+
+
+def get_database_schema(database_id):
+    """Get full schema metadata for a Notion database."""
+    response = notion_request("GET", f"databases/{database_id}")
+    if not response["success"]:
+        return {
+            "success": False,
+            "schema": {},
+            "error": response.get("error", "Unknown error"),
+        }
+
+    data = response["data"]
+    return {
+        "success": True,
+        "schema": data.get("properties", {}),
+        "title": parse_rich_text(data.get("title", [])),
+        "raw": data,
+    }
+
+
+def retrieve_page(page_id):
+    """Retrieve a page object by ID."""
+    response = notion_request("GET", f"pages/{page_id}")
+    if not response["success"]:
+        return {
+            "success": False,
+            "page": None,
+            "error": response.get("error", "Unknown error"),
+        }
+    return {"success": True, "page": response["data"]}
+
+
+def _normalize_key(text):
+    # Remove control characters (e.g. \x08 in "\x08Date") before normalizing
+    cleaned = "".join(ch for ch in (text or "") if ch.isprintable())
+    return cleaned.strip().lower().replace(" ", "").replace("_", "")
+
+
+def get_title_property_name(schema):
+    """Return the title property name in a database schema."""
+    for prop_name, prop_def in schema.items():
+        if prop_def.get("type") == "title":
+            return prop_name
+    return None
+
+
+def _coerce_property_value_for_write(prop_type, value):
+    """Convert Python primitive to Notion property payload."""
+    if prop_type == "title":
+        return {"title": [{"text": {"content": str(value)}}]}
+    if prop_type == "rich_text":
+        return {"rich_text": [{"text": {"content": str(value)}}]}
+    if prop_type == "number":
+        try:
+            return {"number": float(value)}
+        except (TypeError, ValueError):
+            return {"number": None}
+    if prop_type == "select":
+        return {"select": {"name": str(value)}} if value else {"select": None}
+    if prop_type == "multi_select":
+        if isinstance(value, list):
+            return {"multi_select": [{"name": str(v)} for v in value if str(v).strip()]}
+        if value:
+            return {"multi_select": [{"name": str(value)}]}
+        return {"multi_select": []}
+    if prop_type == "status":
+        return {"status": {"name": str(value)}} if value else {"status": None}
+    if prop_type == "checkbox":
+        return {"checkbox": bool(value)}
+    if prop_type == "url":
+        return {"url": str(value) if value else None}
+    if prop_type == "email":
+        return {"email": str(value) if value else None}
+    if prop_type == "phone_number":
+        return {"phone_number": str(value) if value else None}
+    if prop_type == "date":
+        if isinstance(value, dict):
+            start = value.get("start")
+            end = value.get("end")
+            # Ensure KST timezone on datetime strings without timezone
+            if start and "T" in str(start) and "+" not in str(start).split("T")[1] and "Z" not in str(start):
+                start = f"{start}+09:00"
+            return {"date": {"start": start, "end": end} if start else None}
+        val_str = str(value) if value else ""
+        # Ensure KST timezone on datetime strings without timezone
+        if val_str and "T" in val_str and "+" not in val_str.split("T")[1] and "Z" not in val_str:
+            val_str = f"{val_str}+09:00"
+        return {"date": {"start": val_str} if val_str else None}
+    if prop_type == "relation":
+        if isinstance(value, list):
+            return {"relation": [{"id": str(v)} for v in value if str(v).strip()]}
+        if value:
+            return {"relation": [{"id": str(value)}]}
+        return {"relation": []}
+    return None
+
+
+def build_properties_from_values(schema, values):
+    """Map generic key/value pairs to a database's property schema.
+
+    The mapper tries exact and normalized name matching.
+    """
+    if not isinstance(values, dict):
+        return {}
+
+    normalized_schema = {_normalize_key(name): name for name in schema.keys()}
+    properties = {}
+    for key, value in values.items():
+        if value is None:
+            continue
+        prop_name = None
+        if key in schema:
+            prop_name = key
+        else:
+            prop_name = normalized_schema.get(_normalize_key(str(key)))
+        if not prop_name:
+            continue
+
+        prop_type = schema.get(prop_name, {}).get("type")
+        if not prop_type:
+            continue
+        payload = _coerce_property_value_for_write(prop_type, value)
+        if payload is not None:
+            properties[prop_name] = payload
+    return properties
+
+
+# ---------------------------------------------------------------------------
 # Database operations
 # ---------------------------------------------------------------------------
 
-def query_database(db_id, filter_obj=None, sorts=None, page_size=100):
+def query_database(db_id, filter_obj=None, sorts=None, page_size=100, start_cursor=None, max_results=None):
     """Query a Notion database with optional filter and sort.
 
     Handles pagination automatically: if there are more results than a
@@ -239,10 +481,12 @@ def query_database(db_id, filter_obj=None, sorts=None, page_size=100):
     collected or an error occurs.
 
     Args:
-        db_id:      Notion database ID.
-        filter_obj: Optional Notion filter object (dict).
-        sorts:      Optional list of sort objects.
-        page_size:  Number of results per page (max 100).
+        db_id:       Notion database ID.
+        filter_obj:  Optional Notion filter object (dict).
+        sorts:       Optional list of sort objects.
+        page_size:   Number of results per page (max 100).
+        start_cursor: Optional cursor for pagination resume.
+        max_results: Optional upper bound for total records.
 
     Returns:
         dict with keys:
@@ -251,7 +495,7 @@ def query_database(db_id, filter_obj=None, sorts=None, page_size=100):
             error (str):    Error message on failure.
     """
     all_results = []
-    start_cursor = None
+    next_cursor = start_cursor
 
     while True:
         body = {"page_size": min(page_size, 100)}
@@ -259,8 +503,8 @@ def query_database(db_id, filter_obj=None, sorts=None, page_size=100):
             body["filter"] = filter_obj
         if sorts:
             body["sorts"] = sorts
-        if start_cursor:
-            body["start_cursor"] = start_cursor
+        if next_cursor:
+            body["start_cursor"] = next_cursor
 
         response = notion_request("POST", f"databases/{db_id}/query", body)
 
@@ -272,16 +516,31 @@ def query_database(db_id, filter_obj=None, sorts=None, page_size=100):
             }
 
         data = response["data"]
-        all_results.extend(data.get("results", []))
+        page_results = data.get("results", [])
+        all_results.extend(page_results)
+
+        if max_results is not None and len(all_results) >= max_results:
+            all_results = all_results[:max_results]
+            return {
+                "success": True,
+                "results": all_results,
+                "has_more": True,
+                "next_cursor": data.get("next_cursor"),
+            }
 
         if not data.get("has_more", False):
             break
 
-        start_cursor = data.get("next_cursor")
-        if not start_cursor:
+        next_cursor = data.get("next_cursor")
+        if not next_cursor:
             break
 
-    return {"success": True, "results": all_results}
+    return {
+        "success": True,
+        "results": all_results,
+        "has_more": False,
+        "next_cursor": None,
+    }
 
 
 # ---------------------------------------------------------------------------

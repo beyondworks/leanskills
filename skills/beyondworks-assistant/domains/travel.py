@@ -3,16 +3,26 @@ import json
 from datetime import datetime, timedelta
 from core.config import get_domain_config
 from core.notion_client import query_database, create_page, update_page, parse_page_properties
-from core.openai_client import chat_with_tools, chat_completion
-from core.history import add_to_history, get_recent_history
+from core.openai_client import (
+    chat_completion,
+    chat_with_tools_multi,
+    REQUEST_USER_CHOICE_TOOL,
+    LEARN_RULE_TOOL,
+)
+from core.memory import get_rules_as_prompt
 
 DOMAIN = "travel"
+
+PLAIN_TEXT_RULE = "\n\n## 응답 규칙\n- 반드시 플레인 텍스트로 응답. **bold**, [link](url), # heading, `code` 등 마크다운 절대 금지.\n- 이모지 사용 가능."
+
 
 def _cfg():
     return get_domain_config(DOMAIN)
 
+
 def _db(key):
     return _cfg().get("databases", {}).get(key, "")
+
 
 SYSTEM_PROMPT = """당신은 여행 관리 비서입니다. 여행 계획, 일정, 예약, 준비물을 관리합니다.
 
@@ -23,7 +33,7 @@ SYSTEM_PROMPT = """당신은 여행 관리 비서입니다. 여행 계획, 일�
 - 준비물 체크리스트 관리
 
 ## 응답 스타일
-- 한국어, 간결하게, 이모지 활용"""
+- 한국어, 간결하게""" + PLAIN_TEXT_RULE
 
 TOOLS = [
     {"type": "function", "function": {
@@ -64,6 +74,7 @@ TOOLS = [
     }}
 ]
 
+
 def _query_trips(status=None):
     today = datetime.now().strftime('%Y-%m-%d')
     filt = None
@@ -79,6 +90,7 @@ def _query_trips(status=None):
         return [parse_page_properties(p) for p in r.get("results", [])]
     return []
 
+
 def _query_itinerary(keyword=None):
     filt = None
     if keyword:
@@ -90,6 +102,7 @@ def _query_itinerary(keyword=None):
     if isinstance(r, dict) and r.get("success"):
         return [parse_page_properties(p) for p in r.get("results", [])]
     return []
+
 
 def _query_reservations(keyword=None):
     filt = None
@@ -103,6 +116,7 @@ def _query_reservations(keyword=None):
         return [parse_page_properties(p) for p in r.get("results", [])]
     return []
 
+
 def _query_packing(keyword=None):
     filt = None
     if keyword:
@@ -113,6 +127,7 @@ def _query_packing(keyword=None):
     if isinstance(r, dict) and r.get("success"):
         return [parse_page_properties(p) for p in r.get("results", [])]
     return []
+
 
 def _calc_dday(date_str):
     if not date_str:
@@ -129,12 +144,13 @@ def _calc_dday(date_str):
     except Exception:
         return ""
 
+
 def _exec_tool(name, args):
     if name == "get_trips":
         status = args.get("status")
         trips = _query_trips(status)
         if trips:
-            lines = ["✈️ 여행 목록:"]
+            lines = ["여행 목록:"]
             for t in trips:
                 trip_name = t.get("Name", t.get("이름", ""))
                 date = t.get("Date", {})
@@ -150,7 +166,7 @@ def _exec_tool(name, args):
         keyword = args.get("trip_name", "")
         items = _query_itinerary(keyword)
         if items:
-            lines = [f"📋 '{keyword}' 세부 일정 ({len(items)}건):"]
+            lines = [f"'{keyword}' 세부 일정 ({len(items)}건):"]
             for it in items[:20]:
                 item_name = it.get("Name", "")
                 date = it.get("Date", {})
@@ -168,7 +184,7 @@ def _exec_tool(name, args):
         keyword = args.get("trip_name")
         reservations = _query_reservations(keyword)
         if reservations:
-            lines = [f"🏨 예약 현황 ({len(reservations)}건):"]
+            lines = [f"예약 현황 ({len(reservations)}건):"]
             for r in reservations:
                 res_name = r.get("Name", "")
                 status = r.get("Status", r.get("상태", ""))
@@ -190,11 +206,11 @@ def _exec_tool(name, args):
         if items:
             checked = [i for i in items if i.get("Checked", i.get("체크", False))]
             unchecked = [i for i in items if not i.get("Checked", i.get("체크", False))]
-            lines = [f"🎒 준비물 ({len(checked)}/{len(items)} 완료):"]
+            lines = [f"준비물 ({len(checked)}/{len(items)} 완료):"]
             for i in unchecked:
-                lines.append(f"  ☐ {i.get('Name', '')}")
+                lines.append(f"  [ ] {i.get('Name', '')}")
             for i in checked:
-                lines.append(f"  ☑ {i.get('Name', '')}")
+                lines.append(f"  [v] {i.get('Name', '')}")
             return "\n".join(lines)
         return "준비물 목록이 없습니다."
 
@@ -207,14 +223,14 @@ def _exec_tool(name, args):
             if page_id:
                 r = update_page(page_id, {"Checked": {"checkbox": checked}})
                 if r.get("success"):
-                    return f"{'☑' if checked else '☐'} '{item_name}' {'체크 완료' if checked else '체크 해제'}!"
-                return f"❌ 업데이트 실패: {r.get('error', '')}"
+                    return f"'{item_name}' {'체크 완료' if checked else '체크 해제'}!"
+                return f"업데이트 실패: {r.get('error', '')}"
         return f"'{item_name}' 항목을 찾을 수 없습니다."
 
     return "알 수 없는 도구"
 
 
-def handle(message, mode="chat"):
+def handle(message, mode="chat", session=None, image_urls=None):
     if mode == "dday_reminder":
         trips = _query_trips("upcoming")
         today = datetime.now()
@@ -230,31 +246,42 @@ def handle(message, mode="chat"):
                 diff = (target - today).days
                 if diff in [30, 14, 7, 3, 1, 0]:
                     dday = _calc_dday(start)
-                    reminders.append(f"✈️ {trip_name} {dday} ({start})")
+                    reminders.append(f"{trip_name} {dday} ({start})")
             except Exception:
                 continue
         if reminders:
-            return {"response": "🔔 여행 D-day 알림:\n" + "\n".join(reminders), "domain": DOMAIN}
+            return {"response": "여행 D-day 알림:\n" + "\n".join(reminders), "domain": DOMAIN}
         return {"response": "", "domain": DOMAIN}
 
     if not message:
         return {"error": "메시지가 필요합니다", "domain": DOMAIN}
 
+    # Build context
     trips = _query_trips()
     today = datetime.now().strftime('%Y-%m-%d')
 
-    user_content = f"""## 여행 현황
+    context = f"""## 여행 현황
 {json.dumps(trips[:5], ensure_ascii=False, indent=1)}
-오늘 날짜: {today}
+오늘 날짜: {today}"""
 
-## 사용자 요청
-{message}"""
+    # Build messages from session history
+    messages = []
+    if session and session.get("messages"):
+        messages = list(session["messages"][-16:])
+    messages.append({"role": "user", "content": f"{context}\n\n## 사용자 요청\n{message}"})
 
-    text, calls = chat_with_tools(SYSTEM_PROMPT, user_content, TOOLS)
-    if calls:
-        resp = _exec_tool(calls[0]["name"], calls[0]["arguments"])
-    else:
-        resp = text
+    learned_rules = get_rules_as_prompt(DOMAIN)
+    result = chat_with_tools_multi(
+        SYSTEM_PROMPT + learned_rules, messages,
+        TOOLS + [REQUEST_USER_CHOICE_TOOL, LEARN_RULE_TOOL], _exec_tool,
+        domain=DOMAIN, image_urls=image_urls
+    )
 
-    add_to_history(DOMAIN, message, resp)
-    return {"response": resp, "domain": DOMAIN}
+    output = {
+        "response": result["response"],
+        "domain": DOMAIN,
+        "learning_events": result.get("learning_events", []),
+    }
+    if result.get("interactive"):
+        output["interactive"] = result["interactive"]
+    return output

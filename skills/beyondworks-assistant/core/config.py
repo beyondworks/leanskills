@@ -88,5 +88,24 @@ def get_openai_key():
     return os.environ.get('OPENAI_API_KEY', '')
 
 
+def get_ai_config():
+    """Return AI provider configuration from environment.
+
+    Reads:
+        AI_PROVIDER: 'openai' or 'gemini' (default: 'openai')
+        AI_MODEL: model ID (default: 'gpt-4o-mini')
+        GEMINI_API_KEY: Google Gemini API key
+        AI_FALLBACK_PROVIDER: optional fallback provider
+        AI_FALLBACK_MODEL: optional fallback model
+    """
+    return {
+        "provider": os.environ.get('AI_PROVIDER', 'openai'),
+        "model": os.environ.get('AI_MODEL', 'gpt-4o-mini'),
+        "gemini_api_key": os.environ.get('GEMINI_API_KEY', ''),
+        "fallback_provider": os.environ.get('AI_FALLBACK_PROVIDER', ''),
+        "fallback_model": os.environ.get('AI_FALLBACK_MODEL', 'gpt-4o-mini'),
+    }
+
+
 # Auto-load .env on import so keys are available immediately
 load_env()

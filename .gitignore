@@ -27,3 +27,6 @@ Thumbs.db
 
 # Logs
 *.log
+skills/beyondworks-assistant/data/
+skills/beyondworks-assistant/sessions/
+skills/beyondworks-assistant/debug_execution.log
