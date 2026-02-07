@@ -127,6 +127,10 @@ SYSTEM_PROMPT = """당신은 Notion을 속속들이 알고 있는 만능 AI 비�
 - Notes 속성에 쓰는 것이 아닙니다! 반드시 append_blocks_to_page 사용
 - "등록하고 본문에 기입해줘" → create_record → append_blocks_to_page 2단계
 
+## 날짜 자동 기입
+- create_record 시 날짜(Date) 속성이 있는 DB에 레코드를 만들면, 날짜를 명시하지 않아도 오늘 날짜가 자동 기입됩니다.
+- 사용자가 특정 날짜를 언급하면 해당 날짜로 values에 넣어주세요.
+
 ## 작업 원칙
 - "모르겠습니다" 대신 반드시 관련 DB를 조회해서 답변 시도
 - 쓰기 작업(create/update/archive)은 반드시 실행하고, 실패 시 에러를 정확히 보고
@@ -454,6 +458,12 @@ def _exec_tool(name, args):
         if title_prop and title_prop not in properties:
             fallback_title = values.get("title") or values.get("name") or values.get("entry") or "새 항목"
             properties[title_prop] = {"title": [{"text": {"content": str(fallback_title)}}]}
+
+        # 날짜 속성이 있는데 값이 안 들어왔으면 오늘 날짜 자동 기입
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        for prop_name, prop_def in schema.items():
+            if prop_def.get("type") == "date" and prop_name not in properties:
+                properties[prop_name] = {"date": {"start": today_str}}
 
         if not properties:
             return "생성할 필드 값이 없습니다. values를 확인하세요."

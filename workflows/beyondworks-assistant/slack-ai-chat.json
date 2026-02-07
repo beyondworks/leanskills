@@ -123,7 +123,7 @@
       "position": [1000, 300],
       "parameters": {
         "operation": "executeCommand",
-        "command": "=python3 /Users/yoogeon/.claude/skills/beyondworks-assistant/assistant.py router \"{{ $json.message.replace(/\"/g, '\\\\\"') }}\""
+        "command": "=python3 /Users/yoogeon/.claude/skills/beyondworks-assistant/assistant.py router \"{{ $json.message.replace(/\"/g, '\\\\\"') }}\" chat {{ $json.user }} {{ $json.channel }} --session-scope universal_v2"
       },
       "credentials": {
         "sshPassword": {
