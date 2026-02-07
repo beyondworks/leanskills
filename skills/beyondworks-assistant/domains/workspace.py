@@ -127,9 +127,37 @@ SYSTEM_PROMPT = """당신은 Notion을 속속들이 알고 있는 만능 AI 비�
 - Notes 속성에 쓰는 것이 아닙니다! 반드시 append_blocks_to_page 사용
 - "등록하고 본문에 기입해줘" → create_record → append_blocks_to_page 2단계
 
+## 키워드별 저장 대상 DB (중요!)
+사용자가 아래 키워드를 사용하면 반드시 해당 DB에 저장:
+- "뉴스탭에 ~해줘" → 뉴스탭 매핑 DB (news)에 create_record
+- "롤탭에 ~해줘" / "웍스탭에 ~해줘" / "노트에 ~해줘" → works 매핑 DB에 create_record
+- 키워드와 DB 매핑은 위 "데이터베이스 명칭 매핑" 섹션 참조
+
 ## 날짜 자동 기입
-- create_record 시 날짜(Date) 속성이 있는 DB에 레코드를 만들면, 날짜를 명시하지 않아도 오늘 날짜가 자동 기입됩니다.
-- 사용자가 특정 날짜를 언급하면 해당 날짜로 values에 넣어주세요.
+- create_record 시 date 타입 속성에 값을 지정하지 않으면 오늘 날짜가 자동으로 기입됩니다
+- 사용자가 명시적으로 날짜를 지정한 경우에만 해당 날짜를 사용
+
+## 콘텐츠 탭 브리핑/요약 (중요!)
+사용자가 콘텐츠 탭별 브리핑이나 요약을 요청하면 해당 DB를 조회하여 요약 브리핑합니다.
+
+콘텐츠 탭 → DB 매핑:
+- 인사이트 / 인사이트탭 / 인사이트 페이지 → insights DB
+- AI / AI탭 / 에이아이탭 → AI DB
+- 디자인 / 디자인탭 → Design DB
+- 브랜딩 / 브랜딩탭 → Branding DB
+- 빌드 / 빌드탭 → Build DB
+- 마케팅 / 마케팅탭 → Marketing DB
+
+요청 예시와 처리 방법:
+- "인사이트 탭 AI 관련 콘텐츠 요약해서 브리핑해줘" → insights DB에서 keyword="AI"로 summarize_records
+- "이번주 브랜딩 관련 뉴스들 요약 브리핑해줘" → Branding DB에서 query_with_filter(날짜 필터) 후 결과를 요약
+- "디자인 탭 최근 콘텐츠 브리핑해줘" → Design DB에서 summarize_records
+- "마케팅 관련 인사이트 요약해줘" → Marketing DB 또는 insights DB에서 keyword="마케팅"으로 summarize_records
+
+처리 흐름:
+1. 요청에서 대상 탭(DB)과 키워드를 파악
+2. 날짜 조건이 있으면 query_with_filter로 필터링, 없으면 summarize_records로 전체 요약
+3. 특정 주제 키워드가 있으면 keyword 파라미터에 전달
 
 ## 작업 원칙
 - "모르겠습니다" 대신 반드시 관련 DB를 조회해서 답변 시도
@@ -452,6 +480,20 @@ def _exec_tool(name, args):
             return f"DB 스키마 조회 실패: {schema_res.get('error', 'unknown error')}"
 
         schema = schema_res.get("schema", {})
+
+        # 날짜 자동 기입: date 속성이 있는데 값이 비어있으면 오늘 날짜 자동 추가
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        for prop_name, prop_def in schema.items():
+            if prop_def.get("type") == "date":
+                norm_key = prop_name.strip().lower().replace(" ", "").replace("_", "")
+                has_value = False
+                for k, v in values.items():
+                    if k.strip().lower().replace(" ", "").replace("_", "") == norm_key and v:
+                        has_value = True
+                        break
+                if not has_value:
+                    values[prop_name] = today_str
+
         properties = build_properties_from_values(schema, values)
 
         title_prop = get_title_property_name(schema)
