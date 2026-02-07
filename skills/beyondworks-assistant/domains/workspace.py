@@ -22,6 +22,7 @@ from core.notion_client import (
     create_page,
     update_page,
     archive_page,
+    append_blocks,
     parse_page_properties,
     build_properties_from_values,
     get_title_property_name,
@@ -118,6 +119,13 @@ SYSTEM_PROMPT = """당신은 Notion을 속속들이 알고 있는 만능 AI 비�
 2. 필요하면 query_with_filter로 정확한 필터를 적용해 조회
 3. 결과가 없으면 search_workspace로 범위를 넓혀 검색
 4. 찾은 데이터를 기반으로 명확하게 답변
+
+## 페이지 본문 작성 (중요!)
+사용자가 "본문에 기입", "본문에 내용 작성", "페이지에 내용 추가", "본문에 다음 내용 기입" 등을 요청하면:
+1. create_record로 페이지를 먼저 생성 (또는 기존 페이지 page_id 확보)
+2. append_blocks_to_page로 페이지 본문에 내용 추가 (page_id + content)
+- Notes 속성에 쓰는 것이 아닙니다! 반드시 append_blocks_to_page 사용
+- "등록하고 본문에 기입해줘" → create_record → append_blocks_to_page 2단계
 
 ## 작업 원칙
 - "모르겠습니다" 대신 반드시 관련 DB를 조회해서 답변 시도
@@ -260,6 +268,21 @@ TOOLS = [
                     "limit": {"type": "integer"},
                 },
                 "required": ["database_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "append_blocks_to_page",
+            "description": "페이지 본문(body)에 텍스트 블록을 추가. '본문에 기입', '페이지에 내용 작성' 등의 요청에 사용. Notes 속성이 아닌 페이지 본문에 씁니다.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "page_id": {"type": "string", "description": "대상 페이지 ID"},
+                    "content": {"type": "string", "description": "본문에 추가할 텍스트 내용"},
+                },
+                "required": ["page_id", "content"],
             },
         },
     },
@@ -511,6 +534,28 @@ def _exec_tool(name, args):
             temperature=0.2,
         )
         return summary or "요약 결과가 없습니다."
+
+    if name == "append_blocks_to_page":
+        page_id = args.get("page_id", "")
+        content = args.get("content", "")
+        if not content:
+            return "추가할 내용이 없습니다."
+
+        # 줄바꿈 기준으로 paragraph 블록 생성
+        blocks = []
+        for line in content.split("\n"):
+            blocks.append({
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{"type": "text", "text": {"content": line}}]
+                },
+            })
+
+        result = append_blocks(page_id, blocks)
+        if not result.get("success"):
+            return f"본문 추가 실패: {result.get('error', 'unknown error')}"
+        return f"페이지 본문에 내용을 추가했습니다."
 
     return "알 수 없는 도구"
 

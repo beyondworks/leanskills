@@ -83,6 +83,14 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {
             "keyword": {"type": "string"}
         }, "required": ["keyword"]}
+    }},
+    {"type": "function", "function": {
+        "name": "query_schedule_by_range",
+        "description": "특정 날짜 범위의 일정 조회. '지난 3일', '2월 3일~5일', '저번주' 등 과거/미래 일정을 조회할 때 사용.",
+        "parameters": {"type": "object", "properties": {
+            "start_date": {"type": "string", "description": "시작일 YYYY-MM-DD"},
+            "end_date": {"type": "string", "description": "종료일 YYYY-MM-DD"}
+        }, "required": ["start_date", "end_date"]}
     }}
 ]
 
@@ -212,6 +220,26 @@ def _exec_tool(name, args):
                 lines.append(f"- {s.get('Entry name','')} ({s.get('Date','')})")
             return "\n".join(lines)
         return f"'{args['keyword']}' 관련 일정을 찾지 못했어요."
+
+    if name == "query_schedule_by_range":
+        results = _results_to_list(_query_by_range(args["start_date"], args["end_date"]))
+        if results:
+            lines = [f"{args['start_date']} ~ {args['end_date']} 일정:"]
+            for s in results[:20]:
+                date_val = s.get("Date", "")
+                if isinstance(date_val, dict):
+                    date_val = date_val.get("start", "")
+                title = s.get("Entry name", "")
+                notes = s.get("Notes", "")
+                done = s.get("Completed", False)
+                line = f"- [{date_val}] {title}"
+                if done:
+                    line += " (완료)"
+                if notes:
+                    line += f" | 메모: {notes[:50]}"
+                lines.append(line)
+            return "\n".join(lines)
+        return f"{args['start_date']} ~ {args['end_date']} 기간에 일정이 없습니다."
 
     return "알 수 없는 도구"
 

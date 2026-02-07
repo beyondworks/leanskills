@@ -578,6 +578,19 @@ def update_page(page_id, properties):
     return notion_request("PATCH", f"pages/{page_id}", {"properties": properties})
 
 
+def append_blocks(page_id, blocks):
+    """Append children blocks to a Notion page body.
+
+    Args:
+        page_id: The page ID to append blocks to.
+        blocks: List of Notion block objects.
+
+    Returns:
+        dict from notion_request with success/data/error keys.
+    """
+    return notion_request("PATCH", f"blocks/{page_id}/children", {"children": blocks})
+
+
 def archive_page(page_id):
     """Archive (soft-delete) a Notion page.
 
