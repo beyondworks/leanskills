@@ -460,20 +460,37 @@ def classify_domain(message, domain_keywords):
     msg_lower = message.lower()
 
     # --- Phase 1: keyword scoring (instant, no API call) ---
+    # Use word-boundary-aware matching: only count keywords that appear
+    # as standalone tokens, not as substrings of longer words.
+    # Short keywords (<=2 chars) require exact word boundaries.
+    import re as _re
+
     scores = {}
     for domain, keywords in domain_keywords.items():
-        score = sum(1 for kw in keywords if kw in msg_lower)
+        score = 0
+        for kw in keywords:
+            kw_lower = kw.lower()
+            if len(kw_lower) <= 2:
+                # Short keywords: require word boundary (prevent "패키지" matching "키")
+                if _re.search(r'(?:^|[\s,.\'"!?()~])' + _re.escape(kw_lower) + r'(?:$|[\s,.\'"!?()~])', msg_lower):
+                    score += 1
+            else:
+                if kw_lower in msg_lower:
+                    score += 1
         if score > 0:
             scores[domain] = score
 
     if scores:
-        # Return the domain with the highest keyword score
         best = max(scores, key=scores.get)
-        # If there's a clear winner (or tie), return it
         top_score = scores[best]
         tied = [d for d, s in scores.items() if s == top_score]
+        # Clear winner with significant margin — return immediately
         if len(tied) == 1:
-            return best
+            sorted_scores = sorted(scores.values(), reverse=True)
+            second_best = sorted_scores[1] if len(sorted_scores) > 1 else 0
+            if top_score >= second_best * 2 or top_score >= 3:
+                return best
+            # Narrow margin — fall through to AI for disambiguation
         # Multiple domains tied — fall through to AI
 
     # --- Phase 2: AI classification (for ambiguous messages) ---
