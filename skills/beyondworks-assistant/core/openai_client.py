@@ -11,6 +11,7 @@ import urllib.request
 import urllib.error
 from datetime import datetime
 from .config import get_openai_key
+from .ssl_context import get_ssl_context
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +87,7 @@ def chat_with_tools(system_prompt, user_content, tools, model="gpt-4o-mini", max
         method="POST"
     )
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=60, context=get_ssl_context()) as resp:
             result = json.load(resp)
             msg = result['choices'][0]['message']
             tool_calls = msg.get('tool_calls', [])
@@ -199,6 +200,8 @@ def _download_slack_image(url, bot_token):
                 return super().redirect_request(req, fp, code, msg, headers, newurl)
 
         opener = urllib.request.build_opener(_NoRedirect)
+        # Ensure HTTPS verification works even when Python's default CA bundle is missing.
+        opener.add_handler(urllib.request.HTTPSHandler(context=get_ssl_context()))
         req = urllib.request.Request(
             url,
             headers={"Authorization": f"Bearer {bot_token}"},
@@ -228,7 +231,7 @@ def _download_slack_image(url, bot_token):
                     api_url,
                     headers={"Authorization": f"Bearer {bot_token}"},
                 )
-                with urllib.request.urlopen(req, timeout=10) as resp:
+                with urllib.request.urlopen(req, timeout=10, context=get_ssl_context()) as resp:
                     info = json.load(resp)
                     if info.get("ok"):
                         dl_url = info["file"].get("url_private_download", "")
@@ -237,7 +240,7 @@ def _download_slack_image(url, bot_token):
                                 dl_url,
                                 headers={"Authorization": f"Bearer {bot_token}"},
                             )
-                            with urllib.request.urlopen(req2, timeout=30) as resp2:
+                            with urllib.request.urlopen(req2, timeout=30, context=get_ssl_context()) as resp2:
                                 ct = resp2.headers.get("Content-Type", "image/jpeg")
                                 if "text/html" in ct:
                                     return None
@@ -308,9 +311,53 @@ def _build_multimodal_content(text, image_urls):
     return content
 
 
+def _has_action_claim_without_tool_call(response_text, recent_tool_calls):
+    """
+    응답에 "완료", "추가했습니다" 등의 행동 완료 표현이 있지만
+    실제 도구 호출이 없는 경우를 탐지합니다 (할루시네이션 방지).
+
+    Args:
+        response_text: AI의 응답 텍스트
+        recent_tool_calls: 최근 도구 호출 목록 (빈 리스트면 호출 없음)
+
+    Returns:
+        True if hallucination detected, False otherwise
+    """
+    if not response_text:
+        return False
+
+    # 행동 완료를 나타내는 표현들
+    action_claims = [
+        "완료했습니다", "추가했습니다", "생성했습니다", "만들었습니다",
+        "기입했습니다", "저장했습니다", "수정했습니다", "삭제했습니다",
+        "일정이 추가", "일정을 추가", "페이지를 만들", "페이지가 만들",
+        "일정이 생성", "일정을 생성"
+    ]
+
+    response_lower = response_text.lower()
+
+    # 행동 완료 표현이 있는지 확인
+    has_claim = any(claim in response_lower for claim in action_claims)
+
+    if not has_claim:
+        return False
+
+    # 도구 호출이 있었는지 확인
+    if recent_tool_calls:
+        return False  # 도구 호출이 있었으므로 정상
+
+    # "이미"라는 단어가 있으면 이전 상태를 참조하는 것이므로 pass
+    # (단, "이미 추가했습니다"는 여전히 할루시네이션일 수 있음 - 검색 없이 말하면)
+    if "이미" in response_lower:
+        # 검색/조회 도구 없이 "이미"라고 하면 할루시네이션
+        return True
+
+    return True  # 행동 완료 표현은 있지만 도구 호출이 없음
+
+
 def chat_with_tools_multi(system_prompt, messages, tools, tool_executor,
                           max_tokens=1500, max_tool_rounds=3, domain="",
-                          image_urls=None):
+                          image_urls=None, force_tool_call=False):
     """Multi-turn chat with tool execution loop.
 
     Uses the configured AI provider (OpenAI/Gemini) from ai_provider.py.
@@ -325,6 +372,7 @@ def chat_with_tools_multi(system_prompt, messages, tools, tool_executor,
         max_tool_rounds: Maximum tool execution rounds.
         domain: Domain name for learn_rule routing.
         image_urls: Optional list of image URLs to attach to the last user message.
+        force_tool_call: If True, strongly encourage tool calling for command-like requests.
 
     Returns:
         dict with keys:
@@ -336,8 +384,16 @@ def chat_with_tools_multi(system_prompt, messages, tools, tool_executor,
     from .ai_provider import get_provider
 
     provider = get_provider()
-    full_messages = [{"role": "system", "content": system_prompt}] + messages
+
+    # 명령형 요청이면 시스템 프롬프트 강화
+    if force_tool_call:
+        enhanced_prompt = system_prompt + "\n\n⚠️ CRITICAL: 현재 요청은 명령형입니다. 반드시 적절한 도구를 호출해야 합니다. 도구 호출 없이 응답하면 시스템 오류가 발생합니다."
+        full_messages = [{"role": "system", "content": enhanced_prompt}] + messages
+    else:
+        full_messages = [{"role": "system", "content": system_prompt}] + messages
+
     learning_events = []
+    executed_tool_calls = []  # 모든 턴에서 실행된 도구 추적
 
     # Attach images to the last user message if provided
     if image_urls:
@@ -359,8 +415,18 @@ def chat_with_tools_multi(system_prompt, messages, tools, tool_executor,
         tool_calls = result.get("tool_calls", [])
 
         if not tool_calls:
+            # 도구 호출 없이 응답 → 할루시네이션 검사
+            # 단, 이전 턴에서 도구를 실행했으면 정상 완료 응답이므로 skip
+            response_text = result.get("content", "")
+            if not executed_tool_calls and _has_action_claim_without_tool_call(response_text, tool_calls):
+                # 할루시네이션 감지: "완료했습니다"라고 하지만 어떤 턴에서도 도구 호출이 없음
+                return {
+                    "response": "⚠️ 요청을 처리하려고 했지만 실행에 실패했습니다. 구체적으로 다시 요청해주세요.\n(예: '내일 오후 2시 회의 추가해줘')",
+                    "interactive": None,
+                    "learning_events": learning_events,
+                }
             return {
-                "response": strip_markdown(result.get("content", "")),
+                "response": strip_markdown(response_text),
                 "interactive": None,
                 "learning_events": learning_events,
             }
@@ -433,6 +499,7 @@ def chat_with_tools_multi(system_prompt, messages, tools, tool_executor,
         # Execute each tool and append results
         for tc in tool_calls:
             tool_result = tool_executor(tc["name"], tc["arguments"])
+            executed_tool_calls.append(tc["name"])
             full_messages.append({
                 "role": "tool",
                 "tool_call_id": tc["id"],
