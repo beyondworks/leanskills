@@ -9,6 +9,7 @@ import urllib.request
 import urllib.error
 
 from .config import get_openai_key, get_ai_config
+from .ssl_context import get_ssl_context
 
 
 class AIProvider:
@@ -70,7 +71,7 @@ class OpenAIProvider(AIProvider):
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=90) as resp:
+            with urllib.request.urlopen(req, timeout=90, context=get_ssl_context()) as resp:
                 result = json.load(resp)
                 msg = result["choices"][0]["message"]
 
@@ -128,7 +129,7 @@ class GeminiProvider(AIProvider):
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=90) as resp:
+            with urllib.request.urlopen(req, timeout=90, context=get_ssl_context()) as resp:
                 result = json.load(resp)
                 msg = result["choices"][0]["message"]
 

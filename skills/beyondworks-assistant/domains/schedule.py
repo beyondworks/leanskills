@@ -33,9 +33,87 @@ SYSTEM_PROMPT = """당신은 유능하고 친근한 개인 비서입니다. 사�
 ## 핵심 역할
 - 일정 조회/추가/수정/삭제, 빈 시간 확인, 일정 충돌 확인
 
+## ⚠️ CRITICAL: 행동 규칙 (절대 원칙 - 반드시 준수) ⚠️
+
+### 🚨 규칙 1: 명령형 = 도구 호출 필수 (예외 없음)
+사용자가 다음 표현을 사용하면 **100% 반드시** 도구를 호출해야 합니다:
+- "~해줘", "~추가해", "~만들어줘", "~기입해줘", "~잡아줘", "~등록해줘"
+
+**절대 금지**: 도구 호출 없이 "완료했습니다", "추가했습니다", "생성했습니다" 등의 응답
+→ 이렇게 응답하면 시스템 오류로 간주되어 사용자에게 경고 메시지가 표시됩니다.
+
+**올바른 흐름**:
+1. 명령형 요청 감지
+2. 필수 정보 확인 (날짜, 시간 등)
+3. 정보 부족하면 request_user_choice로 선택지 제시
+4. 정보 충분하면 즉시 add_schedule/update_schedule/delete_schedule 호출
+5. 도구 결과 확인 후 응답
+
+### 🚨 규칙 2: 응답 전 도구 실행 결과 확인
+- 도구 결과에 "✅"가 있을 때만 "완료했습니다"라고 응답
+- 도구 결과에 "❌"가 있으면 "실패했습니다"라고 솔직히 응답
+- 도구를 호출하지 않았다면 "~했습니다" 표현 절대 금지
+
+### 🚨 규칙 3: 할루시네이션 절대 금지
+- 이전 대화 내용을 실제 실행한 것처럼 말하지 마세요
+- "이미 ~했습니다"는 search_schedule 도구로 DB에서 확인한 경우에만 사용
+- 확실하지 않으면 "확인이 필요합니다" 또는 도구 호출
+
+## 📝 올바른 처리 예시
+
+**예시 1: 기본 일정 추가**
+```
+사용자: "내일 오후 2시 회의 추가해줘"
+AI 처리:
+  1. 명령형 감지: "추가해줘" → add_schedule 도구 필수
+  2. 정보 추출: 날짜=내일, 시간=14:00, 제목=회의
+  3. add_schedule 호출
+  4. 결과: "✅ 일정 추가 완료! 2026-02-09 14:00 회의"
+응답: "일정 추가 완료! 내일 오후 2시에 회의가 등록되었습니다."
+```
+
+**예시 2: 정보 부족 시**
+```
+사용자: "회의 추가해줘"
+AI 처리:
+  1. 명령형 감지: "추가해줘" → add_schedule 필요
+  2. 날짜 정보 없음 → request_user_choice 호출
+응답: "언제 회의를 추가할까요?"
+선택지: ["오늘", "내일", "모레", "다음 주 월요일"]
+```
+
+**예시 3: 질문형 요청**
+```
+사용자: "내일 일정 있어?"
+AI 처리:
+  1. 질문형 감지: "있어?" → 조회만
+  2. query_schedule_by_range 호출
+  3. 결과 반환
+응답: "내일(2026-02-09) 일정: ..."
+```
+
+## ❌ 절대 하지 말아야 할 응답 (시스템 오류)
+
+```
+사용자: "내일 회의 추가해줘"
+AI (잘못된 응답): "네, 내일 회의 일정을 추가했습니다."
+→ 🚨 오류: add_schedule 도구 호출 없음 → 시스템이 "실행 실패" 경고 표시
+```
+
+```
+사용자: "워크스페이스에 AI 정보 추가해줘"
+AI (잘못된 응답): "이미 AI 정보 일정이 추가되어 있습니다."
+→ 🚨 오류: search_schedule로 확인하지 않고 추측 → 할루시네이션
+```
+
+## 💡 핵심 원칙 요약
+1. 명령형("~해줘") = 반드시 도구 호출
+2. 도구 결과 확인 후 응답
+3. 확실하지 않으면 솔직히 말하거나 도구로 확인
+
 ## 질문 vs 요청 구분
-- "~가능해?", "~있어?", "~알려줘" → 정보 조회만
-- "~해줘", "~추가해", "~잡아줘" → 함수 호출
+- "~가능해?", "~있어?", "~알려줘" → search_schedule, query_schedule_by_range로 조회만
+- "~해줘", "~추가해", "~잡아줘", "~만들어줘" → 반드시 add_schedule, update_schedule 등 실행 도구 호출
 
 ## 중요: 시간대 (Timezone)
 - 모든 시간은 한국 시간(KST, UTC+9) 기준입니다.
@@ -175,14 +253,14 @@ def _exec_tool(name, args):
             props["Members"] = {"rich_text": [{"text": {"content": args["members"]}}]}
         r = create_page(_db("tasks"), props)
         if r["success"]:
-            parts = [f"일정 추가 완료! {args['date']}"]
+            parts = [f"✅ 일정 추가 완료! {args['date']}"]
             if args.get("time"):
                 parts.append(f"{args['time']}")
             parts.append(f"{args['title']}")
             if args.get("location"):
                 parts.append(f"장소: {args['location']}")
             return "\n".join(parts)
-        return f"추가 실패: {r.get('error','')}"
+        return f"❌ 추가 실패: {r.get('error','알 수 없는 오류')}"
 
     if name == "update_schedule":
         pid = args.pop("page_id")
@@ -206,11 +284,11 @@ def _exec_tool(name, args):
         if "location" in args:
             props["Location (Entry)"] = {"rich_text": [{"text": {"content": args["location"]}}]}
         r = update_page(pid, props)
-        return "수정 완료!" if r["success"] else f"수정 실패: {r.get('error','')}"
+        return "✅ 수정 완료!" if r["success"] else f"❌ 수정 실패: {r.get('error','알 수 없는 오류')}"
 
     if name == "delete_schedule":
         r = archive_page(args["page_id"])
-        return "삭제 완료!" if r["success"] else f"삭제 실패: {r.get('error','')}"
+        return "✅ 삭제 완료!" if r["success"] else f"❌ 삭제 실패: {r.get('error','알 수 없는 오류')}"
 
     if name == "search_schedule":
         results = _results_to_list(_search(args["keyword"]))
@@ -317,10 +395,15 @@ def handle(message, mode="chat", session=None, image_urls=None):
     messages.append({"role": "user", "content": f"{context}\n\n## 사용자 요청\n{message}"})
 
     learned_rules = get_rules_as_prompt(DOMAIN)
+
+    # 명령형 요청 감지 (도구 호출 강제)
+    is_command = any(word in message.lower() for word in ["해줘", "추가해", "만들어줘", "기입해줘", "잡아줘", "등록해줘", "수정해", "삭제해", "지워줘"])
+
     result = chat_with_tools_multi(
         SYSTEM_PROMPT + learned_rules, messages,
         TOOLS + [REQUEST_USER_CHOICE_TOOL, LEARN_RULE_TOOL], _exec_tool,
-        domain=DOMAIN, image_urls=image_urls
+        domain=DOMAIN, image_urls=image_urls,
+        force_tool_call=is_command  # 명령형이면 도구 호출 강제
     )
 
     output = {

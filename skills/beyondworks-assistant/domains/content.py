@@ -2,6 +2,7 @@
 import json
 from datetime import datetime, timedelta
 from core.config import get_domain_config
+from core.content_briefing import try_generate_monthly_briefing
 from core.notion_client import query_database, create_page, parse_page_properties
 from core.openai_client import (
     chat_completion,
@@ -13,7 +14,11 @@ from core.memory import get_rules_as_prompt
 
 DOMAIN = "content"
 
-PLAIN_TEXT_RULE = "\n\n## 응답 규칙\n- 반드시 플레인 텍스트로 응답. **bold**, [link](url), # heading, `code` 등 마크다운 절대 금지.\n- 이모지 사용 가능."
+PLAIN_TEXT_RULE = (
+    "\n\n## 응답 규칙\n"
+    "- 반드시 플레인 텍스트로 응답. **bold**, [link](url), # heading, `code` 등 마크다운 절대 금지.\n"
+    "- 이모지/이모티콘 사용 금지."
+)
 
 
 def _cfg():
@@ -149,6 +154,12 @@ def handle(message, mode="chat", session=None, image_urls=None):
 
     if not message:
         return {"error": "메시지가 필요합니다", "domain": DOMAIN}
+
+    # 월간 브리핑/요약 요청은 LLM 라우팅에 의존하지 않고, DB+날짜를 결정적으로 해석해서 처리
+    if mode == "chat":
+        briefing = try_generate_monthly_briefing(message)
+        if briefing:
+            return {"response": briefing, "domain": DOMAIN}
 
     # Build context
     recent = []

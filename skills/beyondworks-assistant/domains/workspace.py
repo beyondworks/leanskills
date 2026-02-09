@@ -7,6 +7,7 @@ Acts as the universal AI agent for all Notion-backed queries.
 import json
 from datetime import datetime, timedelta
 from core.config import get_domain_config, get_all_aliases_map
+from core.content_briefing import try_generate_monthly_briefing
 from core.openai_client import (
     chat_completion,
     chat_with_tools_multi,
@@ -80,6 +81,14 @@ SYSTEM_PROMPT = """당신은 Notion을 속속들이 알고 있는 만능 AI 비�
 예: "디자인 페이지에 기록해줘" → "디자인페이지" 매핑의 DB ID로 create_record 호출
 
 {db_catalog}
+
+## create_record 필수 규칙
+- create_record 호출 시, values에 반드시 제목(title 속성)을 포함하세요.
+- 각 DB마다 title 속성명이 다릅니다. 먼저 inspect_database로 확인하거나, 아래 매핑을 참조하세요.
+- 예: 웍스 탭 → values: {{"Entry name": "주식 정보"}}
+- 예: 일정 → values: {{"Entry name": "회의", "Date": "2026-02-09"}}
+- 예: 재무 → values: {{"Entry": "커피", "Amount": 5000, "Type": "지출"}}
+- values를 null이나 빈 객체로 보내지 마세요. 반드시 제목과 필요한 필드를 채우세요.
 
 ## 재무(지출/수입) 기록 방법
 재무 Timeline DB (database_id는 DB 카탈로그 참조) 속성:
@@ -161,10 +170,10 @@ SYSTEM_PROMPT = """당신은 Notion을 속속들이 알고 있는 만능 AI 비�
 
 ## 작업 원칙
 - "모르겠습니다" 대신 반드시 관련 DB를 조회해서 답변 시도
-- 쓰기 작업(create/update/archive)은 반드시 실행하고, 실패 시 에러를 정확히 보고
+- 쓰기 작업(create/update/archive)은 반드시 도구를 호출하여 실행
 - 결과에 page_id/database_id 포함하지 않아도 됨 (사용자에게 불필요)
-- 오류 시 이유와 대안을 간단히 제시
-- create_record 호출 후 "기록 완료"라고 응답하기 전에 반드시 성공 여부를 확인""" + PLAIN_TEXT_RULE
+- 중간 오류/내부 메시지는 사용자에게 보여주지 말고, 최종 결과만 자연스럽게 전달
+- "[내부 지시]"로 시작하는 메시지는 시스템 안내이므로 사용자에게 절대 노출하지 마세요""" + PLAIN_TEXT_RULE
 
 TOOLS = [
     {
@@ -233,6 +242,14 @@ TOOLS = [
                     "sorts": {
                         "type": "array",
                         "description": "정렬 배열. 예: [{\"property\": \"Date\", \"direction\": \"ascending\"}]",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "property": {"type": "string"},
+                                "direction": {"type": "string", "enum": ["ascending", "descending"]}
+                            },
+                            "required": ["property", "direction"]
+                        },
                     },
                     "limit": {"type": "integer", "description": "최대 결과 수 (기본 20)"},
                 },
@@ -244,14 +261,14 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "create_record",
-            "description": "데이터베이스에 새 레코드 생성",
+            "description": "데이터베이스에 새 레코드 생성. 반드시 values에 제목(title 속성)을 포함해야 합니다. DB 스키마의 title 속성명을 키로 사용하세요.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "database_id": {"type": "string"},
                     "values": {
                         "type": "object",
-                        "description": "키=값 형태의 필드 값 (예: {\"title\":\"간식\",\"amount\":20000})",
+                        "description": "키=속성명, 값=입력값. 반드시 title 속성 포함. 예: {\"Entry name\":\"주식 정보\",\"Memo\":\"메모 내용\"}",
                     },
                 },
                 "required": ["database_id", "values"],
@@ -475,11 +492,20 @@ def _exec_tool(name, args):
         database_id = args.get("database_id", "")
         values = _parse_values(args.get("values"))
 
+        # values가 비어있으면 → args의 다른 필드나 title 힌트에서 복구 시도
+        if not values:
+            title_hint = args.get("title") or args.get("name") or args.get("entry_name")
+            if title_hint:
+                values = {"title": str(title_hint)}
+            else:
+                return "[내부 지시] values가 비어있습니다. values에 제목을 포함해서 다시 호출하세요."
+
         schema_res = get_database_schema(database_id)
         if not schema_res.get("success"):
             return f"DB 스키마 조회 실패: {schema_res.get('error', 'unknown error')}"
 
         schema = schema_res.get("schema", {})
+        title_prop = get_title_property_name(schema)
 
         # 날짜 자동 기입: date 속성이 있는데 값이 비어있으면 오늘 날짜 자동 추가
         today_str = datetime.now().strftime("%Y-%m-%d")
@@ -496,19 +522,26 @@ def _exec_tool(name, args):
 
         properties = build_properties_from_values(schema, values)
 
-        title_prop = get_title_property_name(schema)
+        # title이 properties에 없으면 → values의 아무 문자열 값이라도 title로 사용
         if title_prop and title_prop not in properties:
-            fallback_title = values.get("title") or values.get("name") or values.get("entry") or "새 항목"
-            properties[title_prop] = {"title": [{"text": {"content": str(fallback_title)}}]}
-
-        # 날짜 속성이 있는데 값이 안 들어왔으면 오늘 날짜 자동 기입
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        for prop_name, prop_def in schema.items():
-            if prop_def.get("type") == "date" and prop_name not in properties:
-                properties[prop_name] = {"date": {"start": today_str}}
+            fallback_title = None
+            # 1차: 알려진 키명에서 찾기
+            for key in ("title", "name", "entry", "Entry name", "Entry",
+                        "entry_name", "entry name", "제목"):
+                if values.get(key):
+                    fallback_title = values[key]
+                    break
+            # 2차: values의 첫 번째 문자열 값 사용
+            if not fallback_title:
+                for v in values.values():
+                    if v and isinstance(v, str):
+                        fallback_title = v
+                        break
+            if fallback_title:
+                properties[title_prop] = {"title": [{"text": {"content": str(fallback_title)}}]}
 
         if not properties:
-            return "생성할 필드 값이 없습니다. values를 확인하세요."
+            return "[내부 지시] 생성할 필드 값이 없습니다. values에 제목을 포함해서 다시 호출하세요."
 
         cr = create_page(database_id, properties)
         if not cr.get("success"):
@@ -616,6 +649,12 @@ def handle(message, mode="chat", session=None, image_urls=None):
     if not message:
         return {"error": "메시지가 필요합니다", "domain": DOMAIN}
 
+    # 콘텐츠 탭 월간 브리핑 요청은 결정적으로 처리 (LLM 도구 선택 불확실성 제거)
+    if mode == "chat":
+        briefing = try_generate_monthly_briefing(message)
+        if briefing:
+            return {"response": briefing, "domain": DOMAIN}
+
     messages = []
     if session and session.get("messages"):
         messages = list(session["messages"][-16:])
@@ -634,17 +673,65 @@ def handle(message, mode="chat", session=None, image_urls=None):
     messages.append({"role": "user", "content": message})
 
     learned_rules = get_rules_as_prompt(DOMAIN)
+
+    # 같은 요청 안에서 동일 DB에 대한 create_record 중복 호출 방지
+    created_pages = {}  # {database_id: page_id}
+
+    def _extract_title_from_message(msg):
+        """메시지에서 따옴표로 감싼 제목을 추출. 예: '훅', "김" → 훅, 김"""
+        import re
+        m = re.search(r"['\u2018\u2019\u201c\u201d\"](.*?)['\u2018\u2019\u201c\u201d\"]", msg)
+        return m.group(1) if m else None
+
+    def _exec_tool_guarded(name, args):
+        if name == "create_record":
+            db_id = args.get("database_id", "")
+            if db_id in created_pages:
+                return (f"성공: 이미 생성된 레코드를 사용하세요. page_id: {created_pages[db_id]}. "
+                        f"create_record를 다시 호출하지 마세요. "
+                        f"본문 작성이 필요하면 append_blocks_to_page(page_id=\"{created_pages[db_id]}\", content=\"...\")를 호출하세요.")
+            # values가 비어있으면 원본 메시지에서 제목을 자동 추출하여 보정
+            values = args.get("values")
+            if not values or (isinstance(values, dict) and not values) or values == "null":
+                title = _extract_title_from_message(message)
+                if title:
+                    args["values"] = {"Entry name": title}
+            result = _exec_tool(name, args)
+            if "생성 완료 (page_id:" in result:
+                page_id = result.split("page_id: ")[1].rstrip(")")
+                created_pages[db_id] = page_id
+            return result
+        return _exec_tool(name, args)
+
+    # 명령형 요청(만들어줘, 기입해줘, 추가해줘 등)이면 도구 호출을 강제
+    command_keywords = ["만들", "기입", "추가", "생성", "등록", "수정", "삭제", "기록", "작성", "저장"]
+    is_command = any(kw in message for kw in command_keywords)
+
     result = chat_with_tools_multi(
         system_prompt + learned_rules,
         messages,
         TOOLS + [REQUEST_USER_CHOICE_TOOL, LEARN_RULE_TOOL],
-        _exec_tool,
+        _exec_tool_guarded,
+        max_tool_rounds=7,
         domain=DOMAIN,
         image_urls=image_urls,
+        force_tool_call=is_command,
     )
 
+    response_text = result.get("response", "")
+
+    # 내부 에러 메시지가 사용자에게 노출되지 않도록 코드 레벨에서 차단
+    error_patterns = ["[내부 지시]", "title 속성명", "스키마 에러",
+                      "values가 비어", "제목이 없습니다",
+                      "\"Entry name\"이 누락"]
+    if any(pat in response_text for pat in error_patterns):
+        if created_pages:
+            response_text = "요청을 처리했습니다."
+        else:
+            response_text = "요청을 처리하지 못했습니다. 다시 시도해주세요."
+
     output = {
-        "response": result.get("response", ""),
+        "response": response_text,
         "domain": DOMAIN,
         "learning_events": result.get("learning_events", []),
     }

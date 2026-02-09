@@ -10,6 +10,7 @@ import urllib.request
 import urllib.error
 
 from .config import get_notion_key
+from .ssl_context import get_ssl_context
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -54,7 +55,7 @@ def notion_request(method, endpoint, data=None):
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
 
     try:
-        with urllib.request.urlopen(req, timeout=_DEFAULT_TIMEOUT) as response:
+        with urllib.request.urlopen(req, timeout=_DEFAULT_TIMEOUT, context=get_ssl_context()) as response:
             return {"success": True, "data": json.load(response)}
     except urllib.error.HTTPError as exc:
         error_body = exc.read().decode('utf-8') if exc.fp else str(exc)
